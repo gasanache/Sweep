@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  Deliberately empty, exactly like Wiggle-Direct.entitlements.
+
+	  Sweep cannot be sandboxed: its entire job is to read ~/Library and
+	  /Library and move files out of them, which a container-scoped app has no
+	  way to do. This is therefore a Developer ID build only, never App Store.
+	  Hardened Runtime stays on (ENABLE_HARDENED_RUNTIME at project level), so
+	  the binary is still signed, notarisable and protected against injection.
+	-->
+</dict>
+</plist>
