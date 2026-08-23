@@ -33,6 +33,10 @@ struct SWPResidueClassifier {
     let nameTokens: Set<String>
     let teamID: String?
     let otherVendorApps: [String: [String]]
+    /// Bundle ids of every OTHER installed app, with the display name.
+    /// Chrome's PWA wrappers are literally `com.google.Chrome.app.<id>`, so
+    /// "starts with my bundle id" is not proof of ownership.
+    var otherBundleIDs: [String: String] = [:]
     let otherTeamApps: [String: [String]]
     let otherNameTokens: Set<String>
 
@@ -55,6 +59,16 @@ struct SWPResidueClassifier {
             guard team == teamID else { return .unrelated }   // another developer's data
 
             name = remainder
+            // A matching team id is real evidence even when the remainder is
+            // reverse-DNS; it used to be consumed only by the plain-name
+            // branch and thrown away otherwise, so a same-team container could
+            // come back `.unrelated`.
+            if SWPMatch.looksReverseDNS(SWPMatch.canonicalName(name).name) {
+                let canonical = SWPMatch.canonicalName(name).name.lowercased()
+                let verdict = classifyReverseDNS(canonical)
+                if case .unrelated = verdict { return .nameMatch }
+                return verdict
+            }
             if !SWPMatch.looksReverseDNS(SWPMatch.canonicalName(name).name) {
                 // `UBF8T346G9.Office` — a team-wide container. Ours alone only
                 // when no other installed app ships from the same team.
@@ -77,8 +91,32 @@ struct SWPResidueClassifier {
         identifier == bundleID || identifier.hasPrefix(bundleID + ".")
     }
 
+    /// The installed app that owns `identifier`, if it is not us.
+    private func ownerAmongOthers(_ identifier: String) -> String? {
+        if let name = otherBundleIDs[identifier] { return name }
+        for (other, name) in otherBundleIDs where identifier.hasPrefix(other + ".") {
+            // Prefer the most specific owner; ours only wins if it is longer.
+            if other.count > bundleID.count { return name }
+        }
+        return nil
+    }
+
     private func classifyReverseDNS(_ identifier: String) -> SWPResidueKind {
-        if isBundleScoped(identifier) { return .exclusive }
+        // Another installed app may live UNDER our bundle id — Chrome's
+        // installed web apps are `com.google.Chrome.app.<hash>`, Chrome Canary
+        // is `com.google.Chrome.canary`. Claiming those as exclusive handed a
+        // pre-ticked row containing a different, still-installed app's entire
+        // data.
+        //
+        // Scoped to identifiers we would otherwise have CLAIMED. Running the
+        // owner check over every reverse-DNS name instead turned every other
+        // app's container into a "shared" row — 476 of them in Word's plan
+        // against a true 91 — which is the same noise that made the shared
+        // list unreadable before.
+        if isBundleScoped(identifier) {
+            if let owner = ownerAmongOthers(identifier) { return .shared([owner]) }
+            return .exclusive
+        }
 
         if !vendorPrefix.isEmpty,
            identifier == vendorPrefix || identifier.hasPrefix(vendorPrefix + ".") {
@@ -147,8 +185,10 @@ struct SWPResidueClassifier {
         let productToken = parts.last.map(SWPMatch.normalise) ?? ""
 
         var otherVendorApps: [String: [String]] = [:]
+        var otherBundleIDs: [String: String] = [:]
         var otherNameTokens: Set<String> = []
         for other in others where other.url != app.url {
+            if !other.bundleID.isEmpty { otherBundleIDs[other.bundleID] = other.name }
             let otherParts = other.bundleID.split(separator: ".").map(String.init)
             if otherParts.count >= 2 {
                 let prefix = otherParts[0] + "." + otherParts[1]
@@ -173,6 +213,7 @@ struct SWPResidueClassifier {
                                     nameTokens: SWPInstalledApps.nameTokens(of: app),
                                     teamID: teamID,
                                     otherVendorApps: otherVendorApps,
+                                    otherBundleIDs: otherBundleIDs,
                                     otherTeamApps: otherTeamApps,
                                     otherNameTokens: otherNameTokens)
     }
@@ -205,8 +246,23 @@ struct SWPUninstallPlan {
     let exclusive: [SWPItem]
     let nameMatches: [SWPItem]
     let shared: [SWPSharedResidue]
+    /// True when the bundle is already in the Trash — the drag-to-Trash flow.
+    /// The removal then covers residue only: the bundle is the user's business
+    /// and `SWPSafety.validateAppBundle` would (correctly) refuse a path inside
+    /// `~/.Trash` anyway.
+    var bundleAlreadyTrashed = false
+    /// Installer receipt identifiers under `/var/db/receipts`.
+    ///
+    /// Listed, never removed. They are a few KB of metadata owned by the
+    /// installer subsystem, and `pkgutil --forget` is the only correct way to
+    /// drop one — moving the files by hand desynchronises the receipts
+    /// database. Sweep shows them so the user knows they exist.
+    var receipts: [String] = []
 
-    var defaultBytes: Int64 { appItem.sizeBytes + exclusive.reduce(0) { $0 + $1.sizeBytes } }
+    var defaultBytes: Int64 {
+        (bundleAlreadyTrashed ? 0 : appItem.sizeBytes)
+            + exclusive.reduce(0) { $0 + $1.sizeBytes }
+    }
 }
 
 // MARK: - Finder
@@ -324,7 +380,25 @@ struct SWPResidueFinder {
 
         return SWPUninstallPlan(app: app, appItem: appItem, exclusive: exclusiveItems,
                                 nameMatches: nameItems,
-                                shared: shared.sorted { $0.displayName < $1.displayName })
+                                shared: shared.sorted { $0.displayName < $1.displayName },
+                                receipts: Self.receipts(for: app))
+    }
+
+    // MARK: Receipts
+
+    /// Receipt identifiers whose prefix matches the app's bundle id or vendor.
+    private static func receipts(for app: SWPInstalledApp) -> [String] {
+        guard !app.bundleID.isEmpty else { return [] }
+        let parts = app.bundleID.split(separator: ".").map(String.init)
+        let vendorPrefix = parts.count >= 2 ? parts[0] + "." + parts[1] : app.bundleID
+
+        let output = SWPAppInventory.shell("/usr/sbin/pkgutil", ["--pkgs"])
+        return output.split(separator: "\n").map(String.init).filter { line in
+            let identifier = line.trimmingCharacters(in: .whitespaces).lowercased()
+            guard !identifier.isEmpty, !identifier.hasPrefix("com.apple.") else { return false }
+            return identifier == app.bundleID || identifier.hasPrefix(app.bundleID + ".")
+                || identifier.hasPrefix(vendorPrefix + ".")
+        }.sorted()
     }
 
     // MARK: Containers

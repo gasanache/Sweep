@@ -48,6 +48,7 @@ struct SWPOrphanScanner {
             user("Application Support", "Application Support"),
             user("Caches", "Caches"),
             user("Preferences", "Preferences", filesOnly: true),
+            user("Preferences/ByHost", "Preferences (ByHost)", filesOnly: true),
             user("Logs", "Logs"),
             user("Containers", "Containers", directoriesOnly: true),
             user("Group Containers", "Group Containers", directoriesOnly: true),
@@ -75,9 +76,20 @@ struct SWPOrphanScanner {
         let owner: String
         let label: String
         let confidence: SWPConfidence
+        /// The owner identifier this candidate was judged under. For a
+        /// UUID-named sandbox container that is the resolved
+        /// `MCMMetadataIdentifier`, not the meaningless folder name — which is
+        /// what the row should be titled with.
+        let resolvedName: String
+        /// A loose file rather than a folder, matched on name alone. These are
+        /// the least app-like findings — `aws_credentials_cache.json` is not
+        /// anyone's leftover app data — so they are gathered separately rather
+        /// than presented as if an app owned them.
+        let isStrayFile: Bool
     }
 
-    func scan(unreadable: inout [String], progress: (String) -> Void) -> [SWPGroup] {
+    func scan(unreadable: inout [String], ignored: Set<String> = [],
+              progress: (String) -> Void) -> [SWPGroup] {
         // An unreliable inventory would make every third-party file on the
         // disk read as orphaned. Fail closed: no inferences at all, and the
         // engine surfaces why the category came back empty.
@@ -89,6 +101,7 @@ struct SWPOrphanScanner {
         var candidates: [Candidate] = []
 
         for location in locations {
+            if Task.isCancelled { return [] }
             progress(location.label)
             let keys: [URLResourceKey] = [.isDirectoryKey]
             guard let children = try? FileManager.default.contentsOfDirectory(
@@ -101,6 +114,7 @@ struct SWPOrphanScanner {
             }
 
             for child in children {
+                if ignored.contains(child.standardizedFileURL.path) { continue }
                 guard let candidate = evaluate(child, in: location) else { continue }
                 candidates.append(candidate)
             }
@@ -152,10 +166,14 @@ struct SWPOrphanScanner {
         let confidence: SWPConfidence = (isReverseDNS && !canonical.teamIDStripped)
             ? .confirmed : .likely
 
+        let isStray = !isDirectory && !isReverseDNS
         return Candidate(url: url,
-                         owner: ownerKey(for: canonical.name, isReverseDNS: isReverseDNS),
+                         owner: isStray ? "__stray__"
+                                        : ownerKey(for: canonical.name, isReverseDNS: isReverseDNS),
                          label: location.label,
-                         confidence: confidence)
+                         confidence: isStray ? .likely : confidence,
+                         resolvedName: canonical.name,
+                         isStrayFile: isStray)
     }
 
     /// `MCMMetadataIdentifier` from a container's hidden metadata plist.
@@ -180,46 +198,133 @@ struct SWPOrphanScanner {
         return parts.count >= 2 ? parts[1] : (parts.first ?? name.lowercased())
     }
 
+    /// Owner groups of Review tier smaller than this are folded into one
+    /// summary row.
+    ///
+    /// A 4 KB name-only guess and a 2.9 GB confirmed orphan were rendering as
+    /// equals, and on this Mac the long tail of 4 KB rows buried everything
+    /// worth looking at. Folding is presentation only — the items stay
+    /// individually listed inside the group and remain selectable.
+    private static var smallGroupThreshold: Int64 { SWPSettings.foldThresholdBytes }
+
     private func group(_ candidates: [Candidate]) -> [SWPGroup] {
+        guard !candidates.isEmpty else { return [] }
+
+        // One parallel sizing pass for every candidate. Sizing each item inside
+        // the grouping loop was serial and dominated the leftovers scan.
+        let sizes = SWPDiskSize.sizes(of: candidates.map(\.url))
+        var itemByPath: [String: SWPItem] = [:]
+        for (index, candidate) in candidates.enumerated() {
+            itemByPath[candidate.url.path] = SWPItem(
+                url: candidate.url,
+                sizeBytes: sizes[index],
+                modified: SWPDiskSize.modified(of: candidate.url),
+                location: candidate.label,
+                requiresAdmin: SWPSafety.requiresAdmin(candidate.url))
+        }
+
         var buckets: [String: [Candidate]] = [:]
         for candidate in candidates {
             buckets[candidate.owner, default: []].append(candidate)
         }
 
-        return buckets.compactMap { key, bucket -> SWPGroup? in
-            let items = bucket.map { candidate in
-                SWPItem(url: candidate.url,
-                        sizeBytes: SWPDiskSize.size(of: candidate.url),
-                        modified: SWPDiskSize.modified(of: candidate.url),
-                        location: candidate.label,
-                        requiresAdmin: SWPSafety.requiresAdmin(candidate.url))
+        var groups: [SWPGroup] = []
+        var strayItems: [SWPItem] = []
+        var smallItems: [SWPItem] = []
+        var smallOwners = 0
+
+        for (key, bucket) in buckets {
+            let items = bucket.compactMap { itemByPath[$0.url.path] }
+            guard !items.isEmpty else { continue }
+
+            if key == "__stray__" {
+                strayItems = items
+                continue
             }
-            guard !items.isEmpty else { return nil }
 
             // A group is only as trustworthy as its weakest member: if any path
             // in it was a name-only guess, the whole row needs review.
             let confidence: SWPConfidence = bucket.contains { $0.confidence == .likely }
                 ? .likely : .confirmed
+            let total = items.reduce(0) { $0 + $1.sizeBytes }
 
-            return SWPGroup(id: "leftovers.\(key)",
-                            name: displayName(for: bucket),
-                            category: .leftovers,
-                            confidence: confidence,
-                            items: items)
+            if confidence == .likely, Self.smallGroupThreshold > 0,
+               total < Self.smallGroupThreshold {
+                smallItems += items
+                smallOwners += 1
+                continue
+            }
+
+            groups.append(SWPGroup(id: "leftovers.\(key)",
+                                   name: displayName(for: bucket),
+                                   category: .leftovers,
+                                   confidence: confidence,
+                                   items: items))
         }
+
+        if !smallItems.isEmpty {
+            groups.append(SWPGroup(id: "leftovers.__small__",
+                                   name: "Small leftovers · \(smallOwners) apps",
+                                   category: .leftovers,
+                                   confidence: .likely,
+                                   items: smallItems.sorted { $0.sizeBytes > $1.sizeBytes }))
+        }
+        if !strayItems.isEmpty {
+            groups.append(SWPGroup(id: "leftovers.__stray__",
+                                   name: "Stray files",
+                                   category: .leftovers,
+                                   confidence: .likely,
+                                   items: strayItems.sorted { $0.sizeBytes > $1.sizeBytes }))
+        }
+        return groups
     }
+
+    /// Vendor tokens whose title-cased form reads wrong.
+    ///
+    /// `Operasoftware` and `Bravesoftware` were the ones that looked broken in
+    /// the list; the rest are here so the common cases render the way their
+    /// owners spell them.
+    private static let vendorNames: [String: String] = [
+        "operasoftware": "Opera Software", "bravesoftware": "Brave Software",
+        "macpaw": "MacPaw", "microsoft": "Microsoft", "google": "Google",
+        "jetbrains": "JetBrains", "libreoffice": "LibreOffice", "vmware": "VMware",
+        "crystalidea": "CrystalIdea", "paragon-software": "Paragon Software",
+        "premiumsoft": "PremiumSoft", "qtproject": "Qt Project", "openai": "OpenAI",
+        "github": "GitHub", "gitlab": "GitLab", "youtube": "YouTube",
+        "vandyke": "VanDyke", "teamviewer": "TeamViewer", "anydesk": "AnyDesk",
+        "protonmail": "Proton Mail", "protonvpn": "Proton VPN", "isaacmarovitz": "Whisky",
+    ]
 
     /// Prefers a human-readable name over a reverse-DNS one for the row title.
+    ///
+    /// Three rules, each from a row that looked wrong on this Mac: keep the
+    /// folder's own casing when there is a plain name (`NetVision`, not
+    /// `netvision`); map known vendors (`Operasoftware` → `Opera Software`);
+    /// and never render a token shorter than three characters as a name —
+    /// `lu` and `Kts` were meaningless, so those fall back to the full
+    /// identifier, which at least tells the user what they are looking at.
     private func displayName(for bucket: [Candidate]) -> String {
-        let names = bucket.map { SWPMatch.canonicalName($0.url.lastPathComponent).name }
+        // `resolvedName` rather than the file name: a UUID container's row was
+        // titled with the UUID, throwing away the owner we had already
+        // resolved from its metadata.
+        let names = bucket.map(\.resolvedName)
         let plain = names.filter { !SWPMatch.looksReverseDNS($0) }
-        if let best = plain.max(by: { $0.count < $1.count }) { return best }
-        // Otherwise take the vendor component and title-case it: `com.macpaw.x`
-        // reads far better as "Macpaw" in a list of app names.
+        if let best = plain.max(by: { $0.count < $1.count }), best.count >= 3 {
+            return best
+        }
+
         if let first = names.first {
             let parts = first.split(separator: ".").map(String.init)
-            if parts.count >= 2 { return parts[1].capitalized }
+            if parts.count >= 2 {
+                let vendor = parts[1]
+                if let mapped = Self.vendorNames[vendor.lowercased()] { return mapped }
+                if vendor.count >= 3 { return vendor.capitalized }
+            }
+            // Nothing usable — show the identifier itself rather than a
+            // two-letter fragment of it.
+            return first
         }
-        return names.first ?? "Unknown"
+        return "Unknown"
     }
+
 }

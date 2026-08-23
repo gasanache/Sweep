@@ -7,9 +7,20 @@ import AppKit
 struct SWPUninstallView: View {
 
     @EnvironmentObject private var store: SWPUninstallStore
+    @FocusState private var isSearchFocused: Bool
 
     var body: some View {
-        Group {
+        VStack(spacing: 0) {
+            // Above the switch, so a failure message survives whichever screen
+            // is showing. It used to live inside `picker` alone — and every
+            // path that sets it (won't quit, policy refused, couldn't move)
+            // leaves the plan on screen, so the message was unreachable.
+            if let message = store.statusMessage, store.plan != nil {
+                statusCard(message)
+                    .padding(.horizontal, SWPTheme.Spacing.pane)
+                    .padding(.top, SWPTheme.Spacing.row)
+            }
+
             if let plan = store.plan {
                 SWPUninstallPlanView(plan: plan)
             } else {
@@ -40,8 +51,19 @@ struct SWPUninstallView: View {
             .padding(.top, 34)
             .padding(.bottom, SWPTheme.Spacing.section)
 
-            searchField
-                .padding(.horizontal, SWPTheme.Spacing.pane)
+            HStack(spacing: 8) {
+                searchField
+                Picker("", selection: $store.sortOrder) {
+                    ForEach(SWPUninstallStore.SortOrder.allCases) { order in
+                        Text(order.title).tag(order)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(width: 230)
+                .tint(SWPTheme.Colors.accent)
+            }
+            .padding(.horizontal, SWPTheme.Spacing.pane)
 
             if let message = store.statusMessage {
                 statusCard(message)
@@ -70,6 +92,14 @@ struct SWPUninstallView: View {
                 .textFieldStyle(.plain)
                 .font(SWPTheme.Fonts.body)
                 .foregroundStyle(SWPTheme.Colors.textPrimary)
+                .focused($isSearchFocused)
+            // Zero-sized owner for the shortcut; attaching it to the field
+            // itself would fight the field's own key handling.
+            Button("") { isSearchFocused = true }
+                .keyboardShortcut("f", modifiers: .command)
+                .opacity(0)
+                .frame(width: 0, height: 0)
+                .accessibilityHidden(true)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
@@ -80,7 +110,9 @@ struct SWPUninstallView: View {
         ScrollView {
             LazyVStack(spacing: 2) {
                 ForEach(store.filteredApps) { app in
-                    SWPAppPickerRow(app: app, isRunning: store.isRunning(app)) {
+                    SWPAppPickerRow(app: app,
+                                    isRunning: store.isRunning(app),
+                                    size: store.size(of: app)) {
                         store.select(app)
                     }
                 }
@@ -123,6 +155,7 @@ struct SWPUninstallView: View {
 private struct SWPAppPickerRow: View {
     let app: SWPInstalledApp
     let isRunning: Bool
+    let size: Int64?
     let action: () -> Void
 
     @State private var isHovering = false
@@ -148,13 +181,24 @@ private struct SWPAppPickerRow: View {
 
                 Spacer(minLength: 8)
 
-                Text(app.version)
+                Text(app.lastUsedText)
                     .font(SWPTheme.Fonts.caption)
                     .foregroundStyle(SWPTheme.Colors.textDim)
+                    .frame(width: 96, alignment: .trailing)
+
+                Text(size.map(SWPBytes.string) ?? "—")
+                    .font(SWPTheme.Fonts.caption.monospacedDigit())
+                    .foregroundStyle(SWPTheme.Colors.textSecondary)
+                    .frame(width: 66, alignment: .trailing)
+
                 Image(systemName: "chevron.right")
                     .font(.system(size: 9, weight: .semibold))
                     .foregroundStyle(SWPTheme.Colors.textDim)
             }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("\(app.name), version \(app.version), \(app.lastUsedText)"
+                                + (isRunning ? ", running" : ""))
+            .accessibilityAddTraits(.isButton)
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
             .background(
@@ -193,6 +237,10 @@ private struct SWPUninstallPlanView: View {
                         section("SHARED — LEFT ALONE", subtitle: "used by other installed apps; Sweep will not touch these")
                         sharedList
                     }
+                    if !plan.receipts.isEmpty {
+                        section("INSTALLER RECEIPTS", subtitle: "metadata owned by macOS; left alone")
+                        receiptList
+                    }
                 }
                 .padding(.horizontal, SWPTheme.Spacing.pane)
                 .padding(.bottom, SWPTheme.Spacing.pane)
@@ -217,6 +265,10 @@ private struct SWPUninstallPlanView: View {
 
             Spacer()
 
+            if plan.app.hasSystemExtension {
+                SWPBadge(text: "Ships a system extension", tint: SWPTheme.Colors.review)
+                    .help("Removing the app does not unload its system extension — open the app and remove the extension there first.")
+            }
             if store.isRunning(plan.app) {
                 SWPBadge(text: "Running — will be quit", tint: SWPTheme.Colors.review)
             }
@@ -249,9 +301,13 @@ private struct SWPUninstallPlanView: View {
 
             Spacer(minLength: 8)
 
-            Text(SWPBytes.string(plan.appItem.sizeBytes))
-                .font(SWPTheme.Fonts.number)
-                .foregroundStyle(SWPTheme.Colors.accent)
+            if plan.bundleAlreadyTrashed {
+                SWPBadge(text: "Already in Trash", tint: SWPTheme.Colors.safe)
+            } else {
+                Text(SWPBytes.string(plan.appItem.sizeBytes))
+                    .font(SWPTheme.Fonts.number)
+                    .foregroundStyle(SWPTheme.Colors.accent)
+            }
         }
         .padding(12)
         .swpCard(elevated: true)
@@ -306,6 +362,12 @@ private struct SWPUninstallPlanView: View {
         .swpCard(elevated: ticked)
         .contentShape(Rectangle())
         .onTapGesture { store.toggle(item) }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(item.displayPath), \(item.location), \(SWPBytes.string(item.sizeBytes))"
+                            + (item.requiresAdmin ? ", needs administrator" : ""))
+        .accessibilityValue(ticked ? "selected" : "not selected")
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction { store.toggle(item) }
     }
 
     private var sharedList: some View {
@@ -336,6 +398,30 @@ private struct SWPUninstallPlanView: View {
         .swpCard()
     }
 
+    /// Receipts, listed but never removable — `pkgutil --forget` is the only
+    /// correct way to drop one, and it is not Sweep's call to make.
+    private var receiptList: some View {
+        VStack(spacing: 0) {
+            ForEach(Array(plan.receipts.enumerated()), id: \.element) { index, identifier in
+                if index > 0 { SWPHairline().opacity(0.5) }
+                HStack(spacing: 8) {
+                    Image(systemName: "doc.badge.gearshape")
+                        .font(.system(size: 9))
+                        .foregroundStyle(SWPTheme.Colors.textDim)
+                    Text(identifier)
+                        .font(SWPTheme.Fonts.mono)
+                        .foregroundStyle(SWPTheme.Colors.textSecondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+            }
+        }
+        .swpCard()
+    }
+
     // MARK: Bottom bar
 
     private var bottomBar: some View {
@@ -348,7 +434,9 @@ private struct SWPUninstallPlanView: View {
                 .font(SWPTheme.Fonts.heroUnit)
                 .foregroundStyle(SWPTheme.Colors.accent)
 
-            Text("app + \(store.tickedItems.count) file\(store.tickedItems.count == 1 ? "" : "s")")
+            Text(plan.bundleAlreadyTrashed
+                 ? "\(store.tickedItems.count) leftover file\(store.tickedItems.count == 1 ? "" : "s")"
+                 : "app + \(store.tickedItems.count) file\(store.tickedItems.count == 1 ? "" : "s")")
                 .font(SWPTheme.Fonts.caption)
                 .foregroundStyle(SWPTheme.Colors.textDim)
 
@@ -358,7 +446,8 @@ private struct SWPUninstallPlanView: View {
 
             Spacer(minLength: SWPTheme.Spacing.section)
 
-            Button(store.isUninstalling ? "Working…" : "Uninstall…") {
+            Button(store.isUninstalling ? "Working…"
+                   : plan.bundleAlreadyTrashed ? "Remove Leftovers…" : "Uninstall…") {
                 store.isConfirming = true
             }
             .buttonStyle(SWPPrimaryButtonStyle(isEnabled: !store.isUninstalling))
@@ -384,10 +473,14 @@ private struct SWPUninstallConfirmSheet: View {
             HStack(spacing: 11) {
                 SWPIconTile(symbol: "app.dashed", size: 34)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Uninstall \(store.plan?.app.name ?? "")?")
+                    Text(store.plan?.bundleAlreadyTrashed == true
+                     ? "Remove \(store.plan?.app.name ?? "")'s leftovers?"
+                     : "Uninstall \(store.plan?.app.name ?? "")?")
                         .font(SWPTheme.Fonts.title)
                         .foregroundStyle(SWPTheme.Colors.textPrimary)
-                    Text("The app and \(store.tickedItems.count) file\(store.tickedItems.count == 1 ? "" : "s") (\(SWPBytes.string(store.selectedBytes))) move to the Trash — recoverable with Put Back.")
+                    Text(store.plan?.bundleAlreadyTrashed == true
+                         ? "\(store.tickedItems.count) leftover file\(store.tickedItems.count == 1 ? "" : "s") (\(SWPBytes.string(store.selectedBytes))) move to the Trash — the app is already there. Recoverable with Put Back."
+                         : "The app and \(store.tickedItems.count) file\(store.tickedItems.count == 1 ? "" : "s") (\(SWPBytes.string(store.selectedBytes))) move to the Trash — recoverable with Put Back.")
                         .font(SWPTheme.Fonts.caption)
                         .foregroundStyle(SWPTheme.Colors.textDim)
                         .fixedSize(horizontal: false, vertical: true)

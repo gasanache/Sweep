@@ -140,6 +140,29 @@ struct SWPGroup: Identifiable, Hashable {
     /// Most recent modification across the group, shown as "last used".
     var latestModified: Date? { items.compactMap(\.modified).max() }
 
+    /// Distinct locations this group spans, most common first, capped at three.
+    ///
+    /// Shows *where* a group lives without making the user expand it — the
+    /// difference between "one preferences file" and "a container, a cache and
+    /// a launch agent" is most of what decides whether a row matters.
+    var locationChips: [String] {
+        var order: [String] = []
+        var counts: [String: Int] = [:]
+        for item in items {
+            if counts[item.location] == nil { order.append(item.location) }
+            counts[item.location, default: 0] += 1
+        }
+        // Most-represented location first; ties keep the order encountered so
+        // the chips are stable between scans.
+        let ranked = order.enumerated().sorted { lhs, rhs in
+            let leftCount = counts[lhs.element] ?? 0
+            let rightCount = counts[rhs.element] ?? 0
+            if leftCount != rightCount { return leftCount > rightCount }
+            return lhs.offset < rhs.offset
+        }
+        return Array(ranked.map(\.element).prefix(3))
+    }
+
     var subtitle: String {
         let count = items.count == 1 ? "1 item" : "\(items.count) items"
         guard let date = latestModified else { return count }
@@ -163,6 +186,20 @@ struct SWPScanResult {
     /// inferential scanners were skipped. The UI must say why the leftovers
     /// list is empty rather than let it read as "this Mac is clean".
     var inventoryUnreliable = false
+    /// Carried on the result so a streaming scan can deliver it with the
+    /// startup stage rather than as separate engine state.
+    var healthyStartup: [SWPStartupEntry] = []
+
+    /// Folds one stage's metadata into the running result. Groups are appended
+    /// by the caller; this carries only the scalar and list fields, and never
+    /// overwrites a set value with an empty default.
+    mutating func merge(_ other: SWPScanResult) {
+        if other.appsInventoried > 0 { appsInventoried = other.appsInventoried }
+        if other.inventoryUnreliable { inventoryUnreliable = true }
+        if other.trashBytes > 0 { trashBytes = other.trashBytes }
+        if !other.unreadablePaths.isEmpty { unreadablePaths += other.unreadablePaths }
+        if !other.healthyStartup.isEmpty { healthyStartup = other.healthyStartup }
+    }
 
     func groups(in category: SWPCategory) -> [SWPGroup] {
         groups.filter { $0.category == category }.sorted { lhs, rhs in

@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 // MARK: - Byte formatting
 
@@ -9,18 +10,29 @@ enum SWPBytes {
     /// `.file` count style (base-10, matching Finder) rather than `.binary`.
     /// Users compare Sweep's numbers against Get Info, so we match Finder even
     /// though the on-disk allocation we measure is technically binary.
-    private static let formatter: ByteCountFormatter = {
+    /// `ByteCountFormatter` builds an internal `NumberFormatter` lazily, so a
+    /// shared instance is not safe to touch from two threads — and this is
+    /// called from the views (main actor), from `SWPDiagnostics` and from the
+    /// test suite. The mutex serialises access rather than duplicating the
+    /// formatter per call, and it never escapes the `withLock` body.
+    ///
+    /// Deliberately not swapped for `Int64.formatted(.byteCount(...))`: that
+    /// changes user-visible strings ("1 kB" vs "1 KB") and would break the
+    /// zero-size behaviour the tests pin.
+    private static let formatter = Mutex<ByteCountFormatter>({
         let formatter = ByteCountFormatter()
         formatter.countStyle = .file
         formatter.allowedUnits = [.useKB, .useMB, .useGB]
         formatter.includesUnit = true
         formatter.isAdaptive = true
         return formatter
-    }()
+    }())
 
     static func string(_ bytes: Int64) -> String {
-        guard bytes > 0 else { return "Zero KB" }
-        return formatter.string(fromByteCount: bytes)
+        // ByteCountFormatter spells zero as "Zero KB", which reads as a bug in
+        // a column of numbers.
+        guard bytes > 0 else { return "0 KB" }
+        return formatter.withLock { $0.string(fromByteCount: bytes) }
     }
 
     /// Number and unit as separate strings.
@@ -88,7 +100,17 @@ enum SWPDiskSize {
         // space a removal frees.
         var seenIdentifiers = Set<NSObject>()
 
+        // Periodic cancellation check for the single-tree walk. This one does
+        // fire when `size(of:)` is called directly from a task; it is inert
+        // when reached through `sizes(of:)`'s GCD workers, which is why that
+        // path checks before starting instead.
+        var stepsSinceCancelCheck = 0
         while let child = enumerator?.nextObject() as? URL {
+            stepsSinceCancelCheck += 1
+            if stepsSinceCancelCheck >= 512 {
+                stepsSinceCancelCheck = 0
+                if Task.isCancelled { return total }
+            }
             guard let childValues = try? child.resourceValues(forKeys: keys) else { continue }
             if childValues.isSymbolicLink == true { continue }
             if childValues.isDirectory == true { continue }
@@ -111,16 +133,26 @@ enum SWPDiskSize {
     /// the input, so callers can zip them back together.
     static func sizes(of urls: [URL]) -> [Int64] {
         guard !urls.isEmpty else { return [] }
-        var results = [Int64](repeating: 0, count: urls.count)
-        let lock = NSLock()
+        // Expressed as a mutex rather than a bare var plus an NSLock so the
+        // compiler can verify the invariant the lock was already enforcing.
+        let results = Mutex([Int64](repeating: 0, count: urls.count))
+        // Cancellation is checked ONCE, here, on the calling task.
+        //
+        // `concurrentPerform` runs its blocks on plain GCD worker threads that
+        // carry no task context, so `Task.isCancelled` inside the block is
+        // always false — the check that used to live there was dead code. It
+        // also blocks the calling thread until every iteration finishes, so
+        // there is no thread left to flip a stop flag either. An already-
+        // started batch therefore runs to completion; cancellation takes
+        // effect between batches, and the scanners check it between locations
+        // and sources. Saying so plainly beats a guard that cannot fire.
+        guard !Task.isCancelled else { return results.withLock { $0 } }
 
         DispatchQueue.concurrentPerform(iterations: urls.count) { index in
             let size = self.size(of: urls[index])
-            lock.lock()
-            results[index] = size
-            lock.unlock()
+            results.withLock { $0[index] = size }
         }
-        return results
+        return results.withLock { $0 }
     }
 
     /// Modification date, used to show "last touched" so a user can sanity-check

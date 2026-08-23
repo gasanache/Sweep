@@ -40,11 +40,16 @@ struct SWPSweepRing: View {
                     .stroke(SWPTheme.Colors.border.opacity(0.6), lineWidth: 1)
                     .frame(width: diameter * 0.74, height: diameter * 0.74)
 
-                // Outer arc, clockwise.
-                arc(trim: 0.34, lineWidth: 3.5, diameter: diameter,
-                    gradient: [SWPTheme.Colors.accent.opacity(0.05),
-                               SWPTheme.Colors.accent])
-                    .rotationEffect(.degrees(time * 62 * speed))
+                // Outer arc, clockwise. Suppressed while a definite arc is
+                // showing: both are drawn on the SAME radius, so they overlaid
+                // each other and the join between the solid arc and the
+                // rotating translucent one read as a cut in the ring.
+                if progress == nil {
+                    arc(trim: 0.34, lineWidth: 3.5, diameter: diameter,
+                        gradient: [SWPTheme.Colors.accent.opacity(0.05),
+                                   SWPTheme.Colors.accent])
+                        .rotationEffect(.degrees(time * 62 * speed))
+                }
 
                 // Middle arc, counter-clockwise and dimmer, so it reads as
                 // depth rather than as a second spinner competing for
@@ -62,8 +67,14 @@ struct SWPSweepRing: View {
                         .rotationEffect(.degrees(time * 128))
                 }
 
-                // Definite progress overlay.
+                // Definite progress overlay, drawn over its own full-circle
+                // track so the remaining portion still reads as part of a ring
+                // rather than as a gap.
                 if let progress, progress > 0 {
+                    Circle()
+                        .stroke(SWPTheme.Colors.accent.opacity(0.12), lineWidth: 3.5)
+                        .frame(width: diameter, height: diameter)
+
                     Circle()
                         .trim(from: 0, to: min(max(progress, 0), 1))
                         .stroke(
@@ -76,16 +87,37 @@ struct SWPSweepRing: View {
                 }
             }
             .frame(width: diameter, height: diameter)
+            // Room for the stroke's outer half and the progress arc's glow.
+            // `.drawingGroup()` rasterises into a buffer the size of the view
+            // it is applied to, so with a frame of exactly `diameter` the
+            // shadow was sliced off square — a straight vertical cut down the
+            // right-hand side of the ring. The negative padding afterwards
+            // keeps the layout footprint unchanged.
+            .padding(Self.glowInset)
+            .drawingGroup()
+            .padding(-Self.glowInset)
         }
-        .drawingGroup()
     }
 
+    /// Half the stroke width plus enough for the 8 pt shadow to fall off.
+    private static let glowInset: CGFloat = 24
+
+    /// One trimmed arc with a gradient that spans exactly the arc.
+    ///
+    /// `AngularGradient(colors:center:)` lays its ramp across the full 360° and
+    /// wraps from the last colour straight back to the first, so a trimmed arc
+    /// showed only the first slice of the ramp and carried a hard seam wherever
+    /// the 0° boundary fell underneath it. Bounding the gradient to the arc's
+    /// own sweep removes the seam and lets the fade actually run end to end.
     private func arc(trim: Double, lineWidth: CGFloat, diameter: CGFloat,
                      gradient: [Color]) -> some View {
         Circle()
             .trim(from: 0, to: trim)
             .stroke(
-                AngularGradient(colors: gradient, center: .center),
+                AngularGradient(gradient: Gradient(colors: gradient),
+                                center: .center,
+                                startAngle: .degrees(0),
+                                endAngle: .degrees(360 * trim)),
                 style: StrokeStyle(lineWidth: lineWidth, lineCap: .round)
             )
             .frame(width: diameter, height: diameter)

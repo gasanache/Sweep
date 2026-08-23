@@ -14,8 +14,24 @@ struct SWPInstalledApp: Identifiable, Hashable {
     /// an app can still be uninstalled, matched by name alone.
     let bundleID: String
     let version: String
+    /// Spotlight's last-used date. `nil` when Spotlight has no record — which
+    /// is itself informative for a never-opened app, so it is rendered as
+    /// "never used", not hidden.
+    var lastUsed: Date?
+    /// The bundle ships a system extension (network filter, DriverKit driver,
+    /// endpoint security). Removing the app does not unload it — only the app
+    /// itself can, so the uninstaller says so rather than silently leaving a
+    /// running extension behind.
+    var hasSystemExtension: Bool = false
 
     var id: String { url.path }
+
+    var lastUsedText: String {
+        guard let lastUsed else { return "never used" }
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .abbreviated
+        return "used " + formatter.localizedString(for: lastUsed, relativeTo: Date())
+    }
 }
 
 // MARK: - Lister
@@ -93,10 +109,7 @@ enum SWPInstalledApps {
 
     /// Reads one bundle's identity from its Info.plist.
     static func info(at url: URL) -> SWPInstalledApp? {
-        let plistURL = url.appendingPathComponent("Contents/Info.plist")
-        guard let data = try? Data(contentsOf: plistURL),
-              let plist = try? PropertyListSerialization.propertyList(from: data, format: nil)
-                as? [String: Any] else { return nil }
+        guard let plist = infoPlist(in: url) else { return nil }
 
         let name = (plist["CFBundleDisplayName"] as? String)
             ?? (plist["CFBundleName"] as? String)
@@ -105,7 +118,45 @@ enum SWPInstalledApps {
         let version = (plist["CFBundleShortVersionString"] as? String)
             ?? (plist["CFBundleVersion"] as? String) ?? ""
 
-        return SWPInstalledApp(url: url, name: name, bundleID: bundleID, version: version)
+        let extensionsDirectory = url.appendingPathComponent("Contents/Library/SystemExtensions")
+        let hasExtension = FileManager.default.fileExists(atPath: extensionsDirectory.path)
+
+        return SWPInstalledApp(url: url, name: name, bundleID: bundleID, version: version,
+                               lastUsed: lastUsedDate(of: url),
+                               hasSystemExtension: hasExtension)
+    }
+
+    /// An app bundle's Info.plist, including iOS apps run on Apple silicon.
+    ///
+    /// Those are shipped as `Foo.app/Wrapper/Foo.app/Info.plist` with nothing
+    /// at `Contents/Info.plist`, so reading only the macOS layout returned nil
+    /// — contributing no bundle id and no name tokens, which let a live app's
+    /// container be reported as a confirmed orphan.
+    static func infoPlist(in bundle: URL) -> [String: Any]? {
+        var candidates = [bundle.appendingPathComponent("Contents/Info.plist")]
+        let wrapper = bundle.appendingPathComponent("Wrapper")
+        if let wrapped = try? FileManager.default.contentsOfDirectory(
+            at: wrapper, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) {
+            for inner in wrapped where inner.pathExtension == "app" {
+                candidates.append(inner.appendingPathComponent("Info.plist"))
+            }
+        }
+        for candidate in candidates {
+            guard let data = try? Data(contentsOf: candidate),
+                  let plist = try? PropertyListSerialization.propertyList(from: data, format: nil)
+                    as? [String: Any] else { continue }
+            return plist
+        }
+        return nil
+    }
+
+    /// `kMDItemLastUsedDate` via Spotlight.
+    ///
+    /// `NSMetadataItem` rather than shelling out to `mdls`: one in-process
+    /// lookup per app, no subprocess for a list that can run to hundreds.
+    private static func lastUsedDate(of url: URL) -> Date? {
+        guard let item = NSMetadataItem(url: url) else { return nil }
+        return item.value(forAttribute: "kMDItemLastUsedDate") as? Date
     }
 
     /// Extra name evidence for the classifier: executable name and the
@@ -113,10 +164,7 @@ enum SWPInstalledApps {
     static func nameTokens(of app: SWPInstalledApp) -> Set<String> {
         var tokens: Set<String> = []
         var raw = [app.name, app.url.deletingPathExtension().lastPathComponent]
-        let plistURL = app.url.appendingPathComponent("Contents/Info.plist")
-        if let data = try? Data(contentsOf: plistURL),
-           let plist = try? PropertyListSerialization.propertyList(from: data, format: nil)
-            as? [String: Any] {
+        if let plist = infoPlist(in: app.url) {
             for key in ["CFBundleName", "CFBundleDisplayName", "CFBundleExecutable"] {
                 if let value = plist[key] as? String { raw.append(value) }
             }

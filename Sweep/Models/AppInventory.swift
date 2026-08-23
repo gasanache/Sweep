@@ -27,6 +27,17 @@ struct SWPAppInventory {
     /// for a deleted app.
     private(set) var commandNames: Set<String> = []
 
+    /// Reverse-DNS identifiers gathered from sources other than app bundles:
+    /// installer package receipts, loaded launchd jobs, and running processes.
+    ///
+    /// These exist because plenty of software has no `.app` at all — kernel and
+    /// system extensions, printer and audio drivers, VPN helpers, agents. On
+    /// this Mac, Paragon NTFS and Razer are exactly that shape: a driver plus a
+    /// daemon, no bundle in `/Applications`. Without these signals their
+    /// support folders read as orphaned. Every one of them is a *keep* signal,
+    /// so adding them can only ever reduce false positives.
+    private(set) var liveIdentifiers: Set<String> = []
+
     private(set) var appCount: Int = 0
 
     /// Whether the index is complete enough to support "no app owns this"
@@ -44,7 +55,12 @@ struct SWPAppInventory {
     // MARK: Building
 
     /// Builds the index. Blocking and slow (~1s); always call off the main actor.
-    static func build() -> SWPAppInventory {
+    /// - Parameter runningBundleIDs: bundle identifiers of processes running
+    ///   right now, supplied by the caller. Injected rather than read here so
+    ///   this type stays Foundation-only (`NSRunningApplication` would pull in
+    ///   AppKit, which the test bundle and `Scripts/verify.sh` must not need).
+    ///   A running process is the strongest possible proof an app is installed.
+    static func build(runningBundleIDs: Set<String> = []) -> SWPAppInventory {
         var inventory = SWPAppInventory()
         var bundles = Set<String>()
 
@@ -61,6 +77,10 @@ struct SWPAppInventory {
             inventory.absorb(appAt: URL(fileURLWithPath: path))
         }
         inventory.absorbCommandNames()
+        inventory.absorbLiveIdentifiers()
+        for identifier in runningBundleIDs where !identifier.isEmpty {
+            inventory.liveIdentifiers.insert(identifier.lowercased())
+        }
 
         log.info("inventory built: \(bundles.count) apps, \(inventory.bundleIDs.count) bundle ids")
         return inventory
@@ -70,12 +90,14 @@ struct SWPAppInventory {
     /// `isTrustworthy` floor unless the test raises `appCount` itself.
     static func fixture(bundleIDs: Set<String> = [], nameTokens: Set<String> = [],
                         vendorWords: Set<String> = [], commandNames: Set<String> = [],
+                        liveIdentifiers: Set<String> = [],
                         appCount: Int = 0) -> SWPAppInventory {
         var inventory = SWPAppInventory()
         inventory.bundleIDs = Set(bundleIDs.map { $0.lowercased() })
         inventory.nameTokens = nameTokens
         inventory.vendorWords = vendorWords
         inventory.commandNames = commandNames
+        inventory.liveIdentifiers = Set(liveIdentifiers.map { $0.lowercased() })
         inventory.appCount = appCount
         return inventory
     }
@@ -125,10 +147,10 @@ struct SWPAppInventory {
     private mutating func absorb(appAt url: URL) {
         nameTokens.insert(SWPMatch.normalise(url.deletingPathExtension().lastPathComponent))
 
-        let plistURL = url.appendingPathComponent("Contents/Info.plist")
-        guard let data = try? Data(contentsOf: plistURL),
-              let plist = try? PropertyListSerialization.propertyList(from: data, format: nil)
-                as? [String: Any] else { return }
+        // Handles iOS-on-Mac bundles too, which keep their plist under
+        // `Wrapper/<inner>.app/` and would otherwise contribute no identity at
+        // all — letting a live app's container read as orphaned.
+        guard let plist = SWPInstalledApps.infoPlist(in: url) else { return }
 
         if let bundleID = (plist["CFBundleIdentifier"] as? String)?.lowercased(), !bundleID.isEmpty {
             bundleIDs.insert(bundleID)
@@ -202,6 +224,44 @@ struct SWPAppInventory {
         }
     }
 
+    /// Identifiers from installer receipts and loaded launchd jobs.
+    ///
+    /// Both are read with the tools that own them rather than by parsing files
+    /// under `/var/db`, and both are cheap. Running processes are deliberately
+    /// *not* a separate source: a running GUI app is already in the bundle
+    /// inventory, and `launchctl list` covers agents — adding `NSRunningApplication`
+    /// would drag AppKit into a type that must stay Foundation-only so it
+    /// compiles into the test bundle and the headless harness.
+    private mutating func absorbLiveIdentifiers() {
+        // Installer receipts: software installed by a `.pkg` that never shipped
+        // an app bundle — drivers, VPN clients, audio plug-ins.
+        for line in Self.shell("/usr/sbin/pkgutil", ["--pkgs"]).split(separator: "\n") {
+            let identifier = line.trimmingCharacters(in: .whitespaces).lowercased()
+            if !identifier.isEmpty { liveIdentifiers.insert(identifier) }
+        }
+
+        // Loaded launchd jobs. A job loaded right now is by definition not a
+        // leftover. Output is "PID\tStatus\tLabel"; GUI apps appear as
+        // `application.<bundle id>.<numbers>`, so that wrapper is unwrapped.
+        for line in Self.shell("/bin/launchctl", ["list"]).split(separator: "\n").dropFirst() {
+            guard let field = line.split(separator: "\t").last else { continue }
+            var label = field.trimmingCharacters(in: .whitespaces).lowercased()
+            guard !label.isEmpty else { continue }
+            liveIdentifiers.insert(label)
+
+            if label.hasPrefix("application.") {
+                label = String(label.dropFirst("application.".count))
+                let trimmed = label.split(separator: ".")
+                    .prefix { Int($0) == nil }
+                    .joined(separator: ".")
+                if !trimmed.isEmpty { liveIdentifiers.insert(trimmed) }
+            }
+        }
+
+        let identifierCount = liveIdentifiers.count
+        Self.log.info("live identifiers: \(identifierCount)")
+    }
+
     // MARK: Matching
 
     /// Whether any installed app plausibly owns `name`.
@@ -215,15 +275,20 @@ struct SWPAppInventory {
     private func ownsReverseDNS(_ identifier: String) -> Bool {
         let lower = identifier.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))
         if bundleIDs.contains(lower) { return true }
+        if liveIdentifiers.contains(lower) { return true }
 
         let parts = lower.split(separator: ".").map(String.init)
         if parts.count >= 2 {
-            // A helper like `com.acme.tool.updater` belongs to `com.acme.tool`,
-            // so match on the two-component prefix as well as the whole string.
+            // A receipt or loaded job under the same vendor prefix keeps the
+            // whole vendor alive: `com.paragon-software.ntfs` proves the
+            // Paragon driver is installed even with no Paragon app present.
+            //
+            // The same two-component prefix also covers helpers: a bundle id
+            // like `com.acme.tool.updater` belongs to `com.acme.tool`.
             let prefix = parts[0] + "." + parts[1]
-            if bundleIDs.contains(where: { $0 == prefix || $0.hasPrefix(prefix + ".") }) {
-                return true
-            }
+            let claimsPrefix: (String) -> Bool = { $0 == prefix || $0.hasPrefix(prefix + ".") }
+            if liveIdentifiers.contains(where: claimsPrefix) { return true }
+            if bundleIDs.contains(where: claimsPrefix) { return true }
             let vendor = SWPMatch.normalise(parts[1])
             if !SWPMatch.genericWords.contains(vendor), matchesToken(vendor) { return true }
         }

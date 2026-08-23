@@ -54,7 +54,10 @@ enum SWPSafety {
         ].map { URL(fileURLWithPath: $0, isDirectory: true) }
 
         // Package-manager caches that live outside ~/Library by convention.
-        let dotRoots = [".npm", ".cache/pip", ".gradle/caches"]
+        // Roots, not targets: the policy refuses an allowed root itself, so
+        // these must sit one level above what the scanners actually offer
+        // (`.npm/_cacache`, `.gradle/caches`).
+        let dotRoots = [".npm", ".cache", ".gradle"]
             .map { home.appendingPathComponent($0, isDirectory: true) }
 
         return userRoots + systemRoots + dotRoots
@@ -95,6 +98,9 @@ enum SWPSafety {
         // Apple artefacts with ordinary-looking names. `mobilemeaccounts` is
         // the one that matters — it is the iCloud account list, and a user who
         // ticked it because it looked like junk would be signed out.
+        // macOS's own crash and diagnostic stores. `~/Library/Logs/DiagnosticReports`
+        // is Apple state, and tiering it `.safe` put it inside "Select Safe".
+        "diagnosticreports", "crashreporter", "crashreporter_reports",
         "mobilemeaccounts", "gamekit", "contextstoreagent", "default",
         "default.store", "mcxtools", "discrecording", "vnc", "pbs",
         "ipad updater logs", "iphone updater logs", "watch updater logs",
@@ -151,6 +157,16 @@ enum SWPSafety {
         let path = standardized.path
 
         guard path.hasPrefix("/") else { return .rejected("not an absolute path") }
+
+        // Control characters — newlines and tabs especially — are refused
+        // outright. They are meaningless in a real support file, they corrupt
+        // the tab-separated quarantine manifest that makes an authorised
+        // removal reversible, and a newline in a name was demonstrated to
+        // break out of the manifest heredoc in the script that runs as root.
+        // Failing closed here is cheaper than escaping perfectly everywhere.
+        guard path.rangeOfCharacter(from: .controlCharacters) == nil else {
+            return .rejected("path contains control characters")
+        }
         guard !path.contains("..") else { return .rejected("contains a relative traversal") }
         guard path != "/" else { return .rejected("filesystem root") }
 
