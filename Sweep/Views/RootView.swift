@@ -26,12 +26,17 @@ struct SWPRootView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
 
-            if engine.hasResults, !engine.isUninstallerActive {
+            // Gated on the pane, not on whether anything was found: an empty
+            // result hid the action bar entirely, taking the only visible
+            // Rescan button with it and leaving no way forward.
+            if !engine.isUninstallerActive,
+               engine.phase == .results || engine.phase == .removing {
                 SWPHairline()
                 actionBar
             }
         }
         .background(SWPTheme.Colors.background)
+        .background(shortcutSink)
         // The hidden title bar still contributes a top safe-area inset, and
         // the layout used to start below it: the panes' *backgrounds* bled to
         // the window's top edge but the sidebar divider — a Rectangle in the
@@ -74,6 +79,32 @@ struct SWPRootView: View {
         }
     }
 
+    /// Zero-sized buttons that exist only to own keyboard shortcuts.
+    ///
+    /// SwiftUI attaches a shortcut to a control, and Sweep's sidebar rows are
+    /// already buttons with their own click behaviour — hanging ⌘1…⌘5 on them
+    /// would fire the shortcut from whichever row happened to be in the view
+    /// tree. A hidden sink keeps the bindings in one place.
+    private var shortcutSink: some View {
+        ZStack {
+            ForEach(Array(SWPCategory.allCases.enumerated()), id: \.element) { index, category in
+                Button("") {
+                    engine.isUninstallerActive = false
+                    engine.selectedCategory = category
+                }
+                .keyboardShortcut(KeyEquivalent(Character("\(index + 1)")), modifiers: .command)
+            }
+            Button("") { engine.isUninstallerActive = true }
+                .keyboardShortcut("u", modifiers: .command)
+            Button("") { engine.scan() }
+                .keyboardShortcut("r", modifiers: .command)
+                .disabled(engine.phase == .removing)
+        }
+        .opacity(0)
+        .frame(width: 0, height: 0)
+        .accessibilityHidden(true)
+    }
+
     // MARK: Action bar
 
     private var actionBar: some View {
@@ -112,7 +143,7 @@ struct SWPRootView: View {
             }
             .buttonStyle(SWPPrimaryButtonStyle(isEnabled: !engine.selectedItems.isEmpty && !isRemoving))
             .disabled(engine.selectedItems.isEmpty || isRemoving)
-            .keyboardShortcut(.defaultAction)
+            .keyboardShortcut(.delete, modifiers: .command)
         }
         .padding(.horizontal, SWPTheme.Spacing.pane)
         .padding(.vertical, 12)
@@ -137,6 +168,12 @@ struct SWPRootView: View {
                  ? "1 item selected" : "\(engine.selectedItems.count) items selected")
                 .font(SWPTheme.Fonts.caption)
                 .foregroundStyle(SWPTheme.Colors.textDim)
+
+            if engine.hiddenSelectedCount > 0 {
+                SWPBadge(text: "\(engine.hiddenSelectedCount) hidden by filter",
+                         tint: SWPTheme.Colors.review)
+                    .help("Selected rows the current filter is hiding. They are still included — clear the filter to see them.")
+            }
 
             if engine.selectionNeedsAdmin {
                 SWPBadge(text: "Admin", tint: SWPTheme.Colors.review)

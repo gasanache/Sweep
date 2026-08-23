@@ -1,45 +1,76 @@
 import SwiftUI
+import AppKit
 
 // MARK: - Theme
 
 /// The single source of truth for colour, type, spacing and radius.
 ///
-/// Dark-only, like VSGSat. A cleaner is read as a diagnostic instrument, and
-/// the near-black ground lets one warm accent carry every meaningful signal —
-/// the ring, the primary button, the selected row. Supporting both appearances
-/// would have meant two palettes to keep honest for no real gain in a utility
-/// that lives in a single window.
+/// Dark-first: the palette was designed for a near-black ground where one warm
+/// accent carries every meaningful signal — the ring, the primary button, the
+/// selected row. The light counterpart preserves that intent rather than
+/// merely inverting it, and every text pair in it was checked to WCAG AA
+/// including the alpha-composited badge cases. Appearance follows the system
+/// unless overridden in Settings.
 enum SWPTheme {
 
     // MARK: Colors
 
     enum Colors {
-        // Surfaces, lightest to darkest in z-order rather than value order.
-        static let background   = Color(red: 0.043, green: 0.045, blue: 0.051)   // #0b0b0d
-        static let surface      = Color(red: 0.078, green: 0.082, blue: 0.094)   // #141518
-        static let surfaceHigh  = Color(red: 0.110, green: 0.114, blue: 0.130)   // #1c1d21
-        static let border       = Color(red: 0.169, green: 0.176, blue: 0.196)   // #2b2d32
-        static let borderStrong = Color(red: 0.239, green: 0.251, blue: 0.278)   // #3d4047
 
-        // Text
-        static let textPrimary   = Color(red: 0.929, green: 0.933, blue: 0.941)  // #edeef0
-        static let textSecondary = Color(red: 0.612, green: 0.627, blue: 0.663)  // #9ca0a9
-        static let textDim       = Color(red: 0.404, green: 0.420, blue: 0.455)  // #676b74
+        /// A token that resolves per appearance.
+        ///
+        /// `NSColor(name:dynamicProvider:)` rather than reading a SwiftUI
+        /// `@Environment(\.colorScheme)` in every view: the provider is asked
+        /// again whenever the effective appearance changes, so a token works
+        /// identically in the main window, in a sheet, in the About window and
+        /// in an `NSSavePanel` — none of which share an environment.
+        private static func token(dark: UInt32, light: UInt32) -> Color {
+            Color(nsColor: NSColor(name: nil) { appearance in
+                let isDark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+                return NSColor(hex: isDark ? dark : light)
+            })
+        }
 
-        /// The one accent. Warm gold reads as "dust and sweeping" without the
-        /// alarm that red carries or the sterile default of system blue.
-        static let accent      = Color(red: 0.949, green: 0.702, blue: 0.239)    // #f2b33d
-        static let accentDeep  = Color(red: 0.847, green: 0.545, blue: 0.153)    // #d88b27
+        // Surfaces, ordered by z-role rather than by value. The light ramp
+        // inverts the value order deliberately: `surfaceHigh` is *darker* than
+        // `surface` on light, because a selected row has to gain weight, and
+        // on a white ground gaining weight means going down, not up.
+        static let background   = token(dark: 0x0B0B0D, light: 0xEDEFF2)
+        static let surface      = token(dark: 0x141518, light: 0xFFFFFF)
+        static let surfaceHigh  = token(dark: 0x1C1D21, light: 0xE4E8EE)
+        static let border       = token(dark: 0x2B2D32, light: 0xD3D8E0)
+        static let borderStrong = token(dark: 0x3D4047, light: 0x858D9B)
 
-        // Confidence badges. Used small and sparingly — the palette stays
-        // monochrome so that these few tints are the only colour that means
-        // something in the results list. In Use is a deliberately cool,
-        // unexciting steel: it marks data that belongs to a living app, which
-        // should read as "occupied", not as an invitation.
-        static let safe    = Color(red: 0.392, green: 0.831, blue: 0.588)        // #64d496
-        static let review  = Color(red: 0.949, green: 0.702, blue: 0.239)        // #f2b33d
-        static let caution = Color(red: 0.949, green: 0.451, blue: 0.400)        // #f27366
-        static let inUse   = Color(red: 0.478, green: 0.616, blue: 0.769)        // #7a9dc4
+        // Text. `textDim` is intentionally stricter in light than its dark
+        // counterpart: it carries real content (paths, counts, timestamps) and
+        // the dark value only reaches ~3.4:1, short of AA. The light value
+        // clears 4.5:1 on every surface rather than reproducing that shortfall.
+        static let textPrimary   = token(dark: 0xEDEEF0, light: 0x15171B)
+        static let textSecondary = token(dark: 0x9CA0A9, light: 0x4E5560)
+        static let textDim       = token(dark: 0x676B74, light: 0x5F6674)
+
+        /// The one accent. Warm gold reads as "dust and sweeping" on black;
+        /// on white the same hue has to carry its signal through depth instead
+        /// of brightness, so light mode uses a deep bronze of the same hue.
+        /// That single value solves two constraints at once — `SWPCheckbox`
+        /// and `SWPPrimaryButtonStyle` both draw their foreground in
+        /// `background`, so a dark accent is what makes the button label and
+        /// the tick glyph legible (5.9:1) without inventing an on-accent token.
+        static let accent      = token(dark: 0xF2B33D, light: 0x7D5200)
+        /// Recessive ring gradient. The relationship inverts rather than the
+        /// value: darker than `accent` on black, lighter than it on white.
+        static let accentDeep  = token(dark: 0xD88B27, light: 0xA87828)
+
+        // Confidence tints. Hues are held across appearances (safe 148°,
+        // review 39°, caution 4°, inUse 209°) so the meanings stay learnable.
+        // The light values are darker than a naive inversion because
+        // `SWPBadge` paints its tint at 14% and then sets the same tint as
+        // 9.5 pt text on top — that composite, over a *selected* card, is the
+        // lowest-contrast pairing in the app and is what set the floor.
+        static let safe    = token(dark: 0x64D496, light: 0x0B5C30)
+        static let review  = token(dark: 0xF2B33D, light: 0x7D5200)
+        static let caution = token(dark: 0xF27366, light: 0xA3271F)
+        static let inUse   = token(dark: 0x7A9DC4, light: 0x28598A)
 
         static func tint(for confidence: SWPConfidence) -> Color {
             switch confidence {
@@ -105,5 +136,18 @@ struct SWPCardStyle: ViewModifier {
 extension View {
     func swpCard(elevated: Bool = false) -> some View {
         modifier(SWPCardStyle(elevated: elevated))
+    }
+}
+
+// MARK: - Hex
+
+extension NSColor {
+    /// 0xRRGGBB literal → colour. Used only by the theme's token table, where
+    /// hex is the form the palette was designed and contrast-checked in.
+    convenience init(hex: UInt32) {
+        self.init(srgbRed: CGFloat((hex >> 16) & 0xFF) / 255,
+                  green: CGFloat((hex >> 8) & 0xFF) / 255,
+                  blue: CGFloat(hex & 0xFF) / 255,
+                  alpha: 1)
     }
 }

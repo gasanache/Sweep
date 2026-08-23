@@ -19,10 +19,14 @@ struct SWPJunkScanner {
     /// Paths already claimed by an earlier scanner, so a Homebrew cache cannot
     /// appear under both Developer Junk and Caches.
     private var claimed: Set<String>
+    /// Paths the user has permanently excluded; treated exactly like claimed
+    /// paths so they never reach a group.
+    private let ignored: Set<String>
 
-    init(inventory: SWPAppInventory, claimed: Set<String>) {
+    init(inventory: SWPAppInventory, claimed: Set<String>, ignored: Set<String> = []) {
         self.inventory = inventory
         self.claimed = claimed
+        self.ignored = ignored
     }
 
     /// `.inUse` when an installed app owns this entry, `.safe` otherwise.
@@ -37,7 +41,15 @@ struct SWPJunkScanner {
 
     /// Groups smaller than this are rolled into a single summary row.
     /// Sixty rows of 40 KB caches is noise that buries the 3 GB one.
-    private static let individualRowThreshold: Int64 = 1_048_576
+    ///
+    /// Follows the same preference as the leftovers fold, scaled up: the
+    /// caches sweep produces far more rows, so its default sits higher. Zero
+    /// means the user chose "Never fold", and then nothing is summarised
+    /// anywhere — the setting said never, not "never in one category".
+    private static var individualRowThreshold: Int64 {
+        let base = SWPSettings.foldThresholdBytes
+        return base == 0 ? 0 : max(base, 1_048_576)
+    }
 
     // MARK: Developer
 
@@ -46,7 +58,13 @@ struct SWPJunkScanner {
     /// Ordered before the cache sweep so these claim their paths first: derived
     /// data is developer junk, not a generic cache, and the label matters when
     /// someone is deciding whether 24 GB is safe to drop.
-    mutating func scanDeveloper(progress: (String) -> Void) -> [SWPGroup] {
+    /// - Parameter emitGroups: when false the sources are still walked and
+    ///   their paths still claimed, but nothing is reported. Skipping the walk
+    ///   entirely let 6+ GB of toolchain caches fall through to the Caches
+    ///   sweep and come back tiered `.safe` — the opposite of what turning the
+    ///   category off should mean.
+    mutating func scanDeveloper(emitGroups: Bool = true,
+                                progress: (String) -> Void) -> [SWPGroup] {
         let xcode = home.appendingPathComponent("Library/Developer/Xcode", isDirectory: true)
         let caches = home.appendingPathComponent("Library/Caches", isDirectory: true)
 
@@ -70,10 +88,23 @@ struct SWPJunkScanner {
             ("Yarn", caches.appendingPathComponent("Yarn"), false),
             ("CocoaPods", caches.appendingPathComponent("CocoaPods"), false),
             ("Deno", caches.appendingPathComponent("deno"), false),
+            ("Gradle", home.appendingPathComponent(".gradle/caches"), false),
+            ("Xcode Previews",
+             home.appendingPathComponent("Library/Developer/Xcode/UserData/Previews"), false),
         ]
 
-        var groups: [SWPGroup] = []
+        // Collect every candidate URL first, then measure them all in ONE
+        // parallel pass.
+        //
+        // Sizing used to run per source, and a source like Homebrew or
+        // go-build is a single URL — so `sizes(of:)` got a one-element batch
+        // and walked a multi-gigabyte tree on one thread while every other
+        // core idled. Profiling put this stage at 3.0s of a 6s scan for that
+        // reason alone. Batching lets the big single-tree sources overlap with
+        // each other and with DerivedData's children.
+        var pending: [(source: String, url: URL)] = []
         for source in sources {
+            if Task.isCancelled { return [] }
             progress(source.name)
             guard FileManager.default.fileExists(atPath: source.url.path) else { continue }
 
@@ -83,15 +114,36 @@ struct SWPJunkScanner {
                     options: [.skipsHiddenFiles])) ?? []
                 : [source.url]
 
-            let items = makeItems(urls, location: "Developer")
-            guard !items.isEmpty else { continue }
+            for url in urls {
+                let path = url.standardizedFileURL.path
+                guard !claimed.contains(path), !ignored.contains(path),
+                      SWPSafety.validate(url).isAllowed else { continue }
+                claimed.insert(path)
+                pending.append((source.name, url))
+            }
+        }
+        guard !pending.isEmpty, emitGroups else { return [] }
 
+        let sizes = SWPDiskSize.sizes(of: pending.map(\.url))
+        var itemsBySource: [String: [SWPItem]] = [:]
+        for (index, entry) in pending.enumerated() where sizes[index] > 0 {
+            itemsBySource[entry.source, default: []].append(
+                SWPItem(url: entry.url,
+                        sizeBytes: sizes[index],
+                        modified: SWPDiskSize.modified(of: entry.url),
+                        location: "Developer",
+                        requiresAdmin: SWPSafety.requiresAdmin(entry.url)))
+        }
+
+        var groups: [SWPGroup] = []
+        for source in sources {
+            guard let items = itemsBySource[source.name], !items.isEmpty else { continue }
             groups.append(SWPGroup(id: "developer.\(source.name)",
                                    name: source.name,
                                    category: .developer,
                                    confidence: Self.notDisposable.contains(source.name)
                                        ? .likely : .safe,
-                                   items: items))
+                                   items: items.sorted { $0.sizeBytes > $1.sizeBytes }))
         }
         return groups
     }
@@ -108,6 +160,7 @@ struct SWPJunkScanner {
     // MARK: Caches and logs
 
     mutating func scanCaches(progress: (String) -> Void) -> [SWPGroup] {
+        if Task.isCancelled { return [] }
         progress("Caches")
         let root = home.appendingPathComponent("Library/Caches", isDirectory: true)
         return sweepDisposable(root, category: .caches, location: "Caches",
@@ -123,6 +176,7 @@ struct SWPJunkScanner {
                                          isDirectory: true), "Crash Reports"),
         ]
         for (url, label) in roots {
+            if Task.isCancelled { return groups }
             groups += sweepDisposable(url, category: .logs, location: label,
                                       summaryName: "Minor \(label.lowercased())")
         }
@@ -142,6 +196,7 @@ struct SWPJunkScanner {
             at: root, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]
         ) else { return [] }
 
+        if Task.isCancelled { return [] }
         let items = makeItems(children, location: location)
         guard !items.isEmpty else { return [] }
 
@@ -149,9 +204,10 @@ struct SWPJunkScanner {
         var smallSafe: [SWPItem] = []
         var smallInUse: [SWPItem] = []
 
+        let threshold = Self.individualRowThreshold
         for item in items {
             let confidence = ownership(of: item.url)
-            if item.sizeBytes >= Self.individualRowThreshold {
+            if threshold == 0 || item.sizeBytes >= threshold {
                 groups.append(SWPGroup(id: "\(category.rawValue).\(item.id)",
                                        name: prettyName(item.url.lastPathComponent),
                                        category: category,
@@ -186,7 +242,9 @@ struct SWPJunkScanner {
     /// Validates, de-duplicates and measures a batch of URLs.
     private mutating func makeItems(_ urls: [URL], location: String) -> [SWPItem] {
         let usable = urls.filter { url in
-            !claimed.contains(url.standardizedFileURL.path) && SWPSafety.validate(url).isAllowed
+            let path = url.standardizedFileURL.path
+            return !claimed.contains(path) && !ignored.contains(path)
+                && SWPSafety.validate(url).isAllowed
         }
         guard !usable.isEmpty else { return [] }
 

@@ -41,10 +41,26 @@ struct SWPRemovalOutcome {
 /// phase could never render — no suspension point existed between setting it
 /// and clearing it). The stores call these methods from detached tasks and
 /// publish the outcome back on the main actor. The class holds no mutable
-/// state, so there is nothing to isolate.
-final class SWPRemovalService {
+/// state, so there is nothing to isolate — and the `Sendable` conformance now
+/// makes the compiler check that claim rather than take the comment's word for
+/// it (the only stored property is a `Logger`, which is itself Sendable).
+final class SWPRemovalService: Sendable {
 
     private let log = Logger(subsystem: "com.gasanache.sweep", category: "removal")
+    /// Same channel, reachable from the static manifest parser.
+    private static let staticLog = Logger(subsystem: "com.gasanache.sweep", category: "removal")
+
+    /// File name of the manifest written into every quarantine folder.
+    static let manifestName = "sweep-manifest.tsv"
+
+    /// A quarantine folder unique to this run. Date *and* time, because the
+    /// in-batch name de-duplication cannot see files a previous batch already
+    /// put there.
+    static func quarantinePath(prefix: String = "Sweep") -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd 'at' HH.mm.ss"
+        return "\(NSHomeDirectory())/.Trash/\(prefix) \(formatter.string(from: Date()))"
+    }
 
     // MARK: Planning
 
@@ -226,16 +242,10 @@ final class SWPRemovalService {
     /// The authorised batch itself. Callers have already validated: scan-flow
     /// items via `SWPSafety.validate`, an uninstall's bundle via
     /// `validateAppBundle` — this method never receives an unvetted path.
-    private func authorisedMove(_ validated: [SWPItem]) -> SWPRemovalOutcome {
+    private func authorisedMove(_ validated: [SWPItem],
+                                into folder: String? = nil) -> SWPRemovalOutcome {
         var outcome = SWPRemovalOutcome()
-
-        // Folder is unique per *run* (date + time), not per day: the in-batch
-        // name de-duplication below cannot see files quarantined by an earlier
-        // batch, and a same-named `mv -f` across two runs into one folder
-        // would silently destroy a file the app promised was recoverable.
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd 'at' HH.mm.ss"
-        let quarantine = "\(NSHomeDirectory())/.Trash/Sweep \(formatter.string(from: Date()))"
+        let quarantine = folder ?? Self.quarantinePath()
 
         // No `set -e`: one stubborn file must not abandon the rest of the
         // batch mid-flight. Each mv reports its own failure on stdout instead,
@@ -289,6 +299,18 @@ final class SWPRemovalService {
                                      "could not be moved"))
         }
 
+        // The manifest is written from Swift, AFTER the privileged script has
+        // run and chowned the folder to the user.
+        //
+        // It used to be splice d into a `cat <<'SWPMANIFEST'` heredoc inside
+        // that script — the one interpolation that was not shell-quoted. A file
+        // name containing a newline terminated the heredoc early and the rest
+        // of the name executed as root, and `/Library/Caches` is world-writable,
+        // so planting such a name needed no privileges at all. Control
+        // characters are now refused by `SWPSafety.validate` as well; this
+        // removes the sink itself rather than relying on that one check.
+        writeManifest(for: validated, names: destinationNames, in: quarantine)
+
         // Trust the filesystem rather than the exit status: report only what is
         // demonstrably gone.
         for item in validated where !FileManager.default.fileExists(atPath: item.url.path) {
@@ -296,6 +318,19 @@ final class SWPRemovalService {
             outcome.trashedBytes += item.sizeBytes
         }
         return outcome
+    }
+
+    /// Records quarantined name → original path, appending if the folder is
+    /// shared with an earlier batch in the same run.
+    private func writeManifest(for items: [SWPItem], names: [String], in folder: String) {
+        let url = URL(fileURLWithPath: folder).appendingPathComponent(Self.manifestName)
+        var text = (try? String(contentsOf: url, encoding: .utf8))
+            ?? "# Sweep quarantine — quarantined name\toriginal path\n"
+        for (item, name) in zip(items, names)
+        where !FileManager.default.fileExists(atPath: item.url.path) {
+            text += "\(name)\t\(item.url.path)\n"
+        }
+        try? text.write(to: url, atomically: true, encoding: .utf8)
     }
 
     // MARK: Trash
@@ -311,6 +346,172 @@ final class SWPRemovalService {
 
     func reveal(_ item: SWPItem) {
         NSWorkspace.shared.activateFileViewerSelecting([item.url])
+    }
+
+    // MARK: Startup jobs
+
+    /// Unloads launch agents/daemons and moves their plists into a dated
+    /// quarantine folder inside the Trash, with a manifest, so the action can
+    /// be undone from inside the app.
+    ///
+    /// Disabling is *not* removal, which is why it has its own path: the job is
+    /// working and its app is installed. The user is turning something off, so
+    /// the mechanism has to be reversible by design rather than by accident.
+    /// User-owned agents move without a password; only `/Library` jobs need one.
+    func disableStartupJobs(_ entries: [SWPStartupEntry]) -> SWPRemovalOutcome {
+        var outcome = SWPRemovalOutcome()
+        guard !entries.isEmpty else { return outcome }
+
+        var validated: [SWPStartupEntry] = []
+        for entry in entries {
+            guard case .allowed = SWPSafety.validate(entry.url) else {
+                log.fault("policy refused startup disable: \(entry.url.path, privacy: .public)")
+                outcome.refusedByPolicy.append(entry.url.lastPathComponent)
+                continue
+            }
+            validated.append(entry)
+        }
+        guard !validated.isEmpty else { return outcome }
+
+        let quarantine = URL(fileURLWithPath: Self.quarantinePath(prefix: "Sweep Disabled Startup"))
+        let userEntries = validated.filter { !$0.isSystemWide }
+        let systemEntries = validated.filter(\.isSystemWide)
+
+        if !userEntries.isEmpty {
+            try? FileManager.default.createDirectory(at: quarantine,
+                                                     withIntermediateDirectories: true)
+            var manifest = "# Sweep quarantine — quarantined name\toriginal path\n"
+            let names = Self.quarantineNames(for: userEntries.map {
+                SWPItem(url: $0.url, sizeBytes: 0, modified: nil, location: "", requiresAdmin: false)
+            })
+            for (index, entry) in userEntries.enumerated() {
+                bootoutUserAgent(entry.url)
+                let destination = quarantine.appendingPathComponent(names[index])
+                do {
+                    try FileManager.default.moveItem(at: entry.url, to: destination)
+                    manifest += "\(names[index])\t\(entry.url.path)\n"
+                    outcome.trashedCount += 1
+                } catch {
+                    outcome.failures.append((entry.url.lastPathComponent,
+                                             error.localizedDescription))
+                }
+            }
+            let manifestURL = quarantine.appendingPathComponent(Self.manifestName)
+            let existing = (try? String(contentsOf: manifestURL, encoding: .utf8)) ?? ""
+            try? (existing + manifest).write(to: manifestURL, atomically: true, encoding: .utf8)
+        }
+
+        if !systemEntries.isEmpty {
+            let items = systemEntries.map {
+                SWPItem(url: $0.url, sizeBytes: 0, modified: nil,
+                        location: "Startup", requiresAdmin: true)
+            }
+            outcome.merge(authorisedMove(items, into: quarantine.path))
+        }
+        return outcome
+    }
+
+    // MARK: Restore
+
+    /// One restorable entry read back from a quarantine manifest.
+    struct QuarantineEntry {
+        let quarantined: URL
+        let original: URL
+    }
+
+    /// Quarantine folders inside the Trash that still have a manifest and at
+    /// least one file left to restore.
+    static func restorableFolders() -> [URL] {
+        let trash = URL(fileURLWithPath: NSHomeDirectory() + "/.Trash", isDirectory: true)
+        let children = (try? FileManager.default.contentsOfDirectory(
+            at: trash, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])) ?? []
+        return children
+            .filter { $0.lastPathComponent.hasPrefix("Sweep ") }
+            .filter { FileManager.default.fileExists(
+                atPath: $0.appendingPathComponent(manifestName).path) }
+            .sorted { $0.lastPathComponent > $1.lastPathComponent }
+    }
+
+    /// Parses a manifest into entries whose quarantined file still exists.
+    static func entries(in folder: URL) -> [QuarantineEntry] {
+        let manifest = folder.appendingPathComponent(manifestName)
+        guard let text = try? String(contentsOf: manifest, encoding: .utf8) else { return [] }
+        var entries: [QuarantineEntry] = []
+        let folderPath = folder.standardizedFileURL.path
+        for line in text.split(separator: "\n") {
+            guard !line.hasPrefix("#") else { continue }
+            let parts = line.split(separator: "\t", maxSplits: 1).map(String.init)
+            guard parts.count == 2 else { continue }
+
+            // The first column is a single quarantined FILE NAME, never a
+            // path. Validating only the destination made this a
+            // write-anywhere-as-root primitive: a manifest naming
+            // `../../../../etc/sudoers` as its source would have had the
+            // authorised `mv` move that file out of `/etc`. `appendingPathComponent`
+            // does not sanitise `..`, so the check has to be explicit.
+            let name = parts[0]
+            guard !name.isEmpty, !name.contains("/"), name != "..", name != ".",
+                  name.rangeOfCharacter(from: .controlCharacters) == nil else {
+                Self.staticLog.fault("manifest source rejected: \(name, privacy: .public)")
+                continue
+            }
+            let quarantined = folder.appendingPathComponent(name)
+            // Belt and braces: after standardisation it must still be exactly
+            // one component inside the quarantine folder.
+            let quarantinedPath = quarantined.standardizedFileURL.path
+            guard quarantinedPath.hasPrefix(folderPath + "/"),
+                  !quarantinedPath.dropFirst(folderPath.count + 1).contains("/"),
+                  FileManager.default.fileExists(atPath: quarantinedPath) else { continue }
+
+            entries.append(QuarantineEntry(quarantined: quarantined,
+                                           original: URL(fileURLWithPath: parts[1])))
+        }
+        return entries
+    }
+
+    /// Moves quarantined system files back where they came from.
+    ///
+    /// Restores only to paths the policy still accepts, so a tampered manifest
+    /// cannot turn this into a "write anywhere as root" primitive — the same
+    /// gate that authorised the removal authorises the reversal.
+    func restore(from folder: URL) -> (restored: Int, failed: Int, cancelled: Bool) {
+        let entries = Self.entries(in: folder)
+        guard !entries.isEmpty else { return (0, 0, false) }
+
+        var lines: [String] = []
+        var attempted: [QuarantineEntry] = []
+        for entry in entries {
+            // Restore is gated by the same rules that authorised the removal —
+            // including the app-bundle gate. Without that second clause an
+            // application escalated into the authorised batch could never be
+            // put back, because `/Applications` is deliberately outside
+            // `allowedRoots`.
+            let allowed = SWPSafety.validate(entry.original).isAllowed
+                || SWPSafety.validateAppBundle(entry.original).isAllowed
+            guard allowed else {
+                log.fault("restore refused by policy: \(entry.original.path, privacy: .public)")
+                continue
+            }
+            let parent = entry.original.deletingLastPathComponent().path
+            lines.append("mkdir -p \(shellQuote(parent)) || true")
+            lines.append("mv -n \(shellQuote(entry.quarantined.path)) "
+                         + "\(shellQuote(entry.original.path)) || echo SWPFAIL")
+            attempted.append(entry)
+        }
+        guard !lines.isEmpty else { return (0, entries.count, false) }
+
+        let script = "do shell script \"\(appleScriptEscape(lines.joined(separator: "\n")))\""
+            + " with administrator privileges"
+        let result = runOsascript(script)
+        if let errorText = result.errorText, errorText.contains("(-128)") {
+            return (0, 0, true)
+        }
+
+        var restored = 0
+        for entry in attempted where FileManager.default.fileExists(atPath: entry.original.path) {
+            restored += 1
+        }
+        return (restored, attempted.count - restored, false)
     }
 
     // MARK: Subprocess

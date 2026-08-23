@@ -27,7 +27,7 @@ Sweep finds the files applications leave behind — support folders, containers,
 | **Logs & Reports** | Third-party logs and crash reports |
 | **Developer Junk** | Xcode derived data, archives, device support, simulator and package-manager caches |
 | **Startup Items** | Launch agents and daemons that are broken or orphaned, plus a read-only list of everything else that loads at login |
-| **Uninstaller** | An app and all of its files in one move — data shared by other installed apps is never touched |
+| **Uninstaller** | An app and all of its files in one move — data shared by other installed apps is never touched. Sortable by size or last used; installer receipts and system extensions are flagged, never removed |
 
 ## Why it's safe
 
@@ -39,12 +39,24 @@ This is the actual product. Cleaner apps break Macs by guessing; Sweep is built 
 - **Shared data is untouchable.** Uninstalling Word leaves Office's shared containers alone — and tells you which apps they are shared with. Cross-app licensing SDKs (Paddle, FLEXnet, PACE and friends) are refused outright.
 - **An allow-list policy gate** validates every path twice: when it is proposed, and again at the moment of removal. `/System`, Documents, photo and mail libraries, and Apple's own files are structurally out of reach.
 - **It fails closed.** If the installed-app inventory looks incomplete, inferential scanning refuses to run rather than flag everything.
+- **Evidence beyond app bundles.** Installer receipts and loaded launchd jobs count as proof a vendor is still installed, so driver-and-daemon software with no `.app` — VPN clients, filesystem drivers, audio plug-ins — is never mistaken for a leftover.
+- **Ignore anything, permanently.** Right-click a group to exclude it from every future scan; review or undo the list any time.
+- **Undo the irreversible-looking part.** System files moved with your password go to a dated folder in the Trash with a manifest, and Sweep can put them back.
 - **Honest sizes.** Hard-link-aware, package-aware measurement that agrees with `du`.
-- **No dependencies, no telemetry, no network.** Apple frameworks only.
+- **No network. At all.** No telemetry, no analytics, no update checks, no
+  crash reporting, no phone-home of any kind. The binary links no networking
+  framework, references no networking symbol, and ships with no network
+  entitlement — this is a property of the build, not a promise in a document.
+  Sweep reads your disk and writes to your Trash; that is the whole of what it
+  touches.
 
 ## Install
 
-Download the latest notarized `.dmg` from [Releases](https://github.com/gasanache/Sweep/releases), open it, and drag Sweep to Applications. Universal binary, macOS 15.6+.
+```sh
+brew install --cask gasanache/tap/sweep
+```
+
+Or download the latest notarized `.dmg` from [Releases](https://github.com/gasanache/Sweep/releases), open it, and drag Sweep to Applications. Universal binary, macOS 15.6+.
 
 ## Building from source
 
@@ -65,11 +77,31 @@ Or open `Sweep.xcodeproj` and hit Run. The app is **not sandboxed** — a cleane
 xcodebuild test -project Sweep.xcodeproj -scheme Sweep -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO
 ```
 
-45 unit tests pin the parts that must never regress: the safety policy's refusals, orphan matching against real-world false positives, the uninstaller's shared-data classifier, quarantine name collisions, and the selection policy. A headless harness additionally verifies full scans and uninstall plans against a live machine.
+53 unit tests pin the parts that must never regress: the safety policy's refusals, orphan matching against real-world false positives, the uninstaller's shared-data classifier, quarantine name collisions and manifests, cancellation propagation, and the selection policy.
+
+```sh
+./Scripts/verify.sh
+```
+
+The ground-truth harness compiles the real scanners into a command-line tool and runs them against the machine you invoke it on, asserting what unit tests cannot: that every proposed path passes the safety policy, that nothing an installed app or toolchain owns is ever presented as a leftover, and that uninstall plans never offer another app's shared data. It is read-only and removes nothing.
+
+## Command line
+
+```sh
+sweep scan            # what a scan would find
+sweep plan <app>      # what uninstalling an app would remove
+sweep verify          # assert every finding passes the safety policy
+```
+
+Add `--json` to any of them. The CLI is **read-only by design** — it has no removal verb, because everything destructive in Sweep is gated on a person reading a list and ticking rows.
+
+## Updates
+
+There is no updater. New versions appear on the [Releases](https://github.com/gasanache/Sweep/releases) page, or `brew upgrade --cask sweep` if you installed it that way.
 
 ## Roadmap
 
-- SmartDelete-style watcher — offer leftover cleanup when an app is dragged to the Trash
+- Translations — the interface is fully string-catalogued and exports cleanly; it needs a human translator, not a machine
 
 ## License
 

@@ -1,0 +1,516 @@
+{
+  "sourceLanguage": "en",
+  "strings": {
+    "%1$@ · %2$@": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "%1$@%2$@": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "%1$@, %2$@, %3$@, %4$@": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "%1$lld group%2$@ to apps that are still installed. They will rebuild this data — next launches may be slower, and offline content may need downloading again.": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "%1$lld item%2$@ in /Library and need your password. They move to a dated folder inside the Trash, and any matching background daemon is unloaded first.": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "%1$lld items from %2$lld app%3$@": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "%1$lld location%2$@ could not be read": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "%1$lld path%2$@ excluded from every scan.": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "%@ tier": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "%@ will be unloaded and its configuration moved to the Trash, so it no longer starts at login.\n\nIts app is still installed and this is reversible — the file stays in the Trash and Sweep can put it back.": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "%lld": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "%lld ignored": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "%lld items selected": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "1 MB": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "1 item selected": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "16 KB": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "256 KB": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "64 KB": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "A few protected folders stay invisible until you grant Full Disk Access. That is optional — Sweep will tell you if a scan actually hit one.": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "ALSO LOADING AT LOGIN": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "About Sweep": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "All Apps": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Always Ignore This": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "App + its files": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Appearance": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Cancel": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Check for Updates…": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Clean up after %@?": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Cleans what apps leave behind.": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Clear": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Clear All": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Clear filter": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Copy Path%@": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Copyright © 2026 George Asanache. All rights reserved.": {
+      "extractionState": "extracted_with_value",
+      "localizations": {},
+      "comment": "Copyright (human-readable)"
+    },
+    "Delete": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Delete Unavailable Simulators…": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Delete unavailable simulators?": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Deselect": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Deselect All": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Disable": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Disable this startup item?": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Dismiss": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Drag to Trash": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Export Diagnostics…": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "FOUND": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Filter by name or path": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Fold findings under": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Got It": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Grant Full Disk Access in System Settings › Privacy & Security for a complete scan.": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Hide Paths": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Hide paths": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Ignored items": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Later": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Leftover detection was skipped this scan": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Measuring…": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Move the system files from the most recent authorised removal back where they came from": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Move to Trash": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Move to Trash?": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Never fold": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Not Now": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Nothing Selected": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Nothing is being ignored.": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Nothing to clean here": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "OK": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Offer cleanup when I trash an app": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Open Login Items": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Open Privacy Settings": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Open Release Page": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Open the Trash in Finder": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Pick an app to see everything it would leave behind. The app and the files you tick move to the Trash together.": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Recoverable with Put Back in Finder.": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Removes simulator devices whose runtime is gone, using Xcode's own tool": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Removing the app does not unload its system extension — open the app and remove the extension there first.": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Removing…": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Rescan": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Rescanning %@…": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Restoring…": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Reveal in Finder": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Review": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Review Leftovers": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Running": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Runs Xcode's own simctl to remove simulator devices whose runtime is no longer installed.\n\nUnlike everything else in Sweep, this does not go to the Trash and cannot be undone.": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Scan Again": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Scan My Mac": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Scan developer artefacts": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Scanning": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Scanning %1$@, %2$lld of %3$lld stages complete": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Search %lld apps": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Select": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Select All": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Select Safe": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Show Paths": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Show paths": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Show the exact paths": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Small name-only findings are collected into one row so they cannot bury the large ones. They stay listed inside that row.": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Sort order": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Stop Ignoring": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Sweep": {
+      "extractionState": "extracted_with_value",
+      "localizations": {},
+      "comment": "Bundle display name"
+    },
+    "Sweep reads your Library and works out what no longer has an\nowner. Nothing is ever selected for you — you tick, and what you\ntick goes to the Trash, never straight to deletion.": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Sweep works without any special permission.": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "The app and %1$lld file%2$@ (%3$@) move to the Trash — recoverable with Put Back.": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "The installed-app inventory looked incomplete — Spotlight may still be indexing. Sweep refuses to guess in that state; rescan in a few minutes.": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Theme": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Tick every group marked Safe — rebuildable data with no installed owner. In Use, Orphaned and Review groups are never batch-selected.": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Trash %@": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Undo System Removals": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Uninstall %@?": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Uninstaller": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Uninstall…": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Unload this job and move its plist to the Trash — reversible": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "When you drag an application to the Trash, Sweep offers to remove the files it leaves behind. It never touches the app itself — you already did that. Works only while Sweep is open; there is no background helper and nothing is installed outside the app.": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Working…": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "Xcode derived data, archives, device support and package-manager caches. Often the largest category on a developer's Mac.": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "You moved this app to the Trash. Sweep can show the support files it left behind in your Library — the app itself is already handled.": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "across %lld installed apps": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "and %lld more": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "app + %1$lld file%2$@": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "found · scanned %@": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "github.com/gasanache/Sweep": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "hide": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "not selected": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "selected": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "show": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "© 2026 George Asanache · GPL-3.0": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "·": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "· %@": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    },
+    "· owned by installed apps, left alone": {
+      "extractionState": "extracted_with_value",
+      "localizations": {}
+    }
+  },
+  "version": "1.0"
+}

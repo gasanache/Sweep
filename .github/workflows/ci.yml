@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      # Signing is deliberately disabled: CI proves the code builds and the
+      # safety tests pass. Signed, notarized builds are produced locally.
+      - name: Build
+        run: |
+          xcodebuild -project Sweep.xcodeproj -scheme Sweep \
+            -configuration Release -destination 'platform=macOS' \
+            CODE_SIGNING_ALLOWED=NO build
+
+      - name: Test
+        run: |
+          xcodebuild test -project Sweep.xcodeproj -scheme Sweep \
+            -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO
+
+      # Compile-only: a CI runner has no representative Library to scan, so
+      # running the harness would prove nothing. Compiling it does — it is the
+      # check that the model files still build standalone, which is what keeps
+      # them Foundation-only.
+      - name: Compile the ground-truth harness
+        run: ./Scripts/verify.sh --compile-only

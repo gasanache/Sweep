@@ -143,6 +143,34 @@ final class ResidueClassifierTests: XCTestCase {
     }
 
     /// An unsigned target may only claim team containers by exact bundle id.
+    /// Chrome's installed web apps are literally `com.google.Chrome.app.<hash>`
+    /// and are separately installed apps that Sweep itself lists. Treating
+    /// "starts with my bundle id" as proof of ownership classified them
+    /// `.exclusive` — the one tier that is ticked without a click — handing the
+    /// user a pre-ticked row containing another live app's entire data set.
+    func testBundleScopedIdentifierOwnedByAnotherAppIsShared() {
+        let chrome = SWPResidueClassifier(
+            bundleID: "com.google.chrome",
+            vendorPrefix: "com.google",
+            productToken: "chrome",
+            nameTokens: ["googlechrome", "chrome"],
+            teamID: "EQHXZ8M8AV",
+            otherVendorApps: [:],
+            otherBundleIDs: ["com.google.chrome.app.abc": "Microsoft Teams",
+                             "com.google.chrome.canary": "Chrome Canary"],
+            otherTeamApps: [:],
+            otherNameTokens: [])
+
+        XCTAssertEqual(chrome.classify("com.google.chrome.app.abc"),
+                       .shared(["Microsoft Teams"]),
+                       "a PWA wrapper is a different installed app, not Chrome's data")
+        XCTAssertEqual(chrome.classify("com.google.chrome.canary"),
+                       .shared(["Chrome Canary"]))
+        // Our own bundle and its helpers stay exclusive.
+        XCTAssertEqual(chrome.classify("com.google.chrome"), .exclusive)
+        XCTAssertEqual(chrome.classify("com.google.chrome.helper"), .exclusive)
+    }
+
     func testUnsignedTargetClaimsOnlyExactTeamContainers() {
         let unsigned = SWPResidueClassifier(
             bundleID: "com.tiny.tool",

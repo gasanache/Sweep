@@ -47,17 +47,20 @@ struct SWPStartupScanner {
 
     /// Returns removable groups plus the healthy entries, which the Startup
     /// view lists underneath so the user can see the whole picture.
-    func scan(progress: (String) -> Void) -> (groups: [SWPGroup], healthy: [SWPStartupEntry]) {
+    func scan(ignored: Set<String> = [],
+              progress: (String) -> Void) -> (groups: [SWPGroup], healthy: [SWPStartupEntry]) {
         var groups: [SWPGroup] = []
         var healthy: [SWPStartupEntry] = []
 
         for directory in directories {
+            if Task.isCancelled { return (groups, healthy) }
             progress(directory.url.lastPathComponent)
             let children = (try? FileManager.default.contentsOfDirectory(
                 at: directory.url, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]
             )) ?? []
 
             for url in children where url.pathExtension == "plist" {
+                if ignored.contains(url.standardizedFileURL.path) { continue }
                 let label = url.deletingPathExtension().lastPathComponent
                 guard !label.lowercased().hasPrefix("com.apple.") else { continue }
 
@@ -80,7 +83,12 @@ struct SWPStartupScanner {
                                    location: reason.location,
                                    requiresAdmin: SWPSafety.requiresAdmin(url))
 
-                groups.append(SWPGroup(id: "startup.\(label)",
+                // Path-derived, not label-derived: the same plist name exists
+                // in both ~/Library/LaunchAgents and /Library/LaunchAgents
+                // (Google Keystone ships exactly that), and a shared id meant
+                // ticking the visible row also selected an invisible second
+                // group — whose file then went through the root `mv` batch.
+                groups.append(SWPGroup(id: "startup.\(url.standardizedFileURL.path)",
                                        name: label,
                                        category: .startup,
                                        confidence: reason.confidence,

@@ -14,6 +14,7 @@ struct SWPBadge: View {
             .foregroundStyle(tint)
             .padding(.horizontal, 6)
             .padding(.vertical, 2.5)
+            .accessibilityLabel("\(text) tier")
             .background(tint.opacity(0.14))
             .overlay(
                 RoundedRectangle(cornerRadius: SWPTheme.Spacing.radiusBadge, style: .continuous)
@@ -50,6 +51,12 @@ struct SWPCheckbox: View {
             )
             .frame(width: 15, height: 15)
             .animation(.easeOut(duration: 0.12), value: isOn)
+            // A shape-based tick box is invisible to VoiceOver without this:
+            // it has no text, no control identity, and no state to report.
+            .accessibilityElement()
+            .accessibilityAddTraits(isOn ? [.isButton, .isSelected] : .isButton)
+            .accessibilityLabel("Select")
+            .accessibilityValue(isOn ? "selected" : "not selected")
     }
 }
 
@@ -62,12 +69,20 @@ struct SWPPrimaryButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.system(size: 13, weight: .semibold))
-            .foregroundStyle(SWPTheme.Colors.background)
+            // Disabled uses a dimmed *text* colour rather than the window
+            // ground: the ground is near-white in light mode, and drawing it on
+            // a 30%-accent fill left the label all but invisible.
+            .foregroundStyle(isEnabled ? SWPTheme.Colors.background
+                                       : SWPTheme.Colors.textDim)
             .padding(.horizontal, 18)
             .padding(.vertical, 8)
             .background(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(tint.opacity(isEnabled ? 1 : 0.3))
+                    .fill(isEnabled ? tint : SWPTheme.Colors.surfaceHigh)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .stroke(isEnabled ? .clear : SWPTheme.Colors.border, lineWidth: 1)
+                    )
             )
             .opacity(configuration.isPressed ? 0.82 : 1)
             .scaleEffect(configuration.isPressed ? 0.985 : 1)
@@ -113,6 +128,8 @@ struct SWPIconTile: View {
                     .foregroundStyle(tint)
             )
             .frame(width: size, height: size)
+            // Decorative: the adjacent label already carries the meaning.
+            .accessibilityHidden(true)
     }
 }
 
