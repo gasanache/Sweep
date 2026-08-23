@@ -1,6 +1,6 @@
 cask "sweep" do
   version "1.0.1"
-  sha256 "60a31aef81bbc39e21fc4410dea176eb56fb36b0bc7e87de2cc06ca451a90d83"
+  sha256 "4763f585099883a8782fda6bfbd6196dfbccc4d22e461d06427318d08cdfd76b"
 
   url "https://github.com/gasanache/Sweep/releases/download/v#{version}/Sweep-#{version}.dmg",
       verified: "github.com/gasanache/Sweep/"
