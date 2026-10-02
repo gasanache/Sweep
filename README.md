@@ -7,6 +7,7 @@ A native macOS utility for cleaning up app data, uninstalling applications, insp
 ## Install
 
 ```sh
+brew tap gasanache/tap https://github.com/gasanache/Sweep
 brew install --cask gasanache/tap/sweep
 ```
 

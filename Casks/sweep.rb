@@ -1,11 +1,11 @@
 cask "sweep" do
-  version "1.0.1"
-  sha256 "4763f585099883a8782fda6bfbd6196dfbccc4d22e461d06427318d08cdfd76b"
+  version "1.0.2"
+  sha256 "a53d09c9e795f2c41dbecb246e64f139e4fd44674100d99e90869f6345fd4d73"
 
   url "https://github.com/gasanache/Sweep/releases/download/v#{version}/Sweep-#{version}.dmg",
       verified: "github.com/gasanache/Sweep/"
   name "Sweep"
-  desc "Cleaner and uninstaller that moves files to the Trash, never deletes"
+  desc "App cleaner, uninstaller and storage explorer"
   homepage "https://github.com/gasanache/Sweep"
 
   livecheck do
@@ -17,8 +17,7 @@ cask "sweep" do
 
   app "Sweep.app"
 
-  # Sweep is unsandboxed by necessity and writes only to these locations.
-  # Everything it puts in the Trash stays there; nothing here is destructive.
+  # Optional settings and cache cleanup when uninstalling with --zap.
   zap trash: [
     "~/Library/Application Support/com.gasanache.sweep",
     "~/Library/Caches/com.gasanache.sweep",
