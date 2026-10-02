@@ -41,13 +41,12 @@ enum SWPTheme {
         static let border       = token(dark: 0x2B2D32, light: 0xD3D8E0)
         static let borderStrong = token(dark: 0x3D4047, light: 0x858D9B)
 
-        // Text. `textDim` is intentionally stricter in light than its dark
-        // counterpart: it carries real content (paths, counts, timestamps) and
-        // the dark value only reaches ~3.4:1, short of AA. The light value
-        // clears 4.5:1 on every surface rather than reproducing that shortfall.
+        // All informational text, including paths and timestamps, clears
+        // 4.5:1 on every surface in both appearances. Hierarchy comes from
+        // spacing and weight, not unreadable secondary content.
         static let textPrimary   = token(dark: 0xEDEEF0, light: 0x15171B)
         static let textSecondary = token(dark: 0x9CA0A9, light: 0x4E5560)
-        static let textDim       = token(dark: 0x676B74, light: 0x5F6674)
+        static let textDim       = token(dark: 0x8D919A, light: 0x5F6674)
 
         /// The one accent. Warm gold reads as "dust and sweeping" on black;
         /// on white the same hue has to carry its signal through depth instead
@@ -75,7 +74,7 @@ enum SWPTheme {
         static func tint(for confidence: SWPConfidence) -> Color {
             switch confidence {
             case .safe:      return safe
-            case .confirmed: return caution
+            case .confirmed: return textSecondary
             case .likely:    return review
             case .inUse:     return inUse
             }
@@ -89,6 +88,7 @@ enum SWPTheme {
         static let heroUnit    = Font.system(size: 15, weight: .semibold, design: .rounded)
         static let title       = Font.system(size: 17, weight: .semibold)
         static let rowTitle    = Font.system(size: 13, weight: .medium)
+        static let list        = Font.system(size: 13, weight: .regular)
         static let body        = Font.system(size: 12, weight: .regular)
         static let caption     = Font.system(size: 11, weight: .regular)
         static let badge       = Font.system(size: 9.5, weight: .semibold)
@@ -105,8 +105,8 @@ enum SWPTheme {
         static let row: CGFloat = 10
         static let section: CGFloat = 16
         static let pane: CGFloat = 20
-        static let sidebarWidth: CGFloat = 208
-        static let radiusCard: CGFloat = 12
+        static let sidebarWidth: CGFloat = 196
+        static let radiusCard: CGFloat = 9
         static let radiusRow: CGFloat = 9
         static let radiusBadge: CGFloat = 5
     }

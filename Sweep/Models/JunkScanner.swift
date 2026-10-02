@@ -34,9 +34,10 @@ struct SWPJunkScanner {
     /// "Otherwise" is narrower than it looks: orphaned entries were already
     /// claimed by the leftovers scan, and Apple's own names never validate, so
     /// what reaches `.safe` is toolchain residue and the genuinely unowned.
-    private func ownership(of url: URL) -> SWPConfidence {
+    func ownership(of url: URL) -> SWPConfidence {
         let canonical = SWPMatch.canonicalName(url.lastPathComponent).name
-        return inventory.owns(canonical) ? .inUse : .safe
+        if inventory.owns(canonical) { return .inUse }
+        return inventory.isTrustworthy ? .safe : .likely
     }
 
     /// Groups smaller than this are rolled into a single summary row.
@@ -108,11 +109,28 @@ struct SWPJunkScanner {
             progress(source.name)
             guard FileManager.default.fileExists(atPath: source.url.path) else { continue }
 
-            let urls: [URL] = source.childrenAsItems
-                ? (try? FileManager.default.contentsOfDirectory(
-                    at: source.url, includingPropertiesForKeys: nil,
-                    options: [.skipsHiddenFiles])) ?? []
-                : [source.url]
+            let urls: [URL]
+            if source.name == "Homebrew Downloads" {
+                // Never offer the aggregate cache parent: it can contain Local
+                // AI targets whose dedicated checks generic cleanup must not bypass.
+                guard !ignored.contains(source.url.path) else { continue }
+                let children = (try? FileManager.default.contentsOfDirectory(
+                    at: source.url, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])) ?? []
+                urls = children.flatMap { child -> [URL] in
+                    guard !ignored.contains(child.path) else { return [] }
+                    if ["downloads", "Cask"].contains(child.lastPathComponent) {
+                        return (try? FileManager.default.contentsOfDirectory(
+                            at: child, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])) ?? []
+                    }
+                    return [child]
+                }
+            } else {
+                urls = source.childrenAsItems
+                    ? (try? FileManager.default.contentsOfDirectory(
+                        at: source.url, includingPropertiesForKeys: nil,
+                        options: [.skipsHiddenFiles])) ?? []
+                    : [source.url]
+            }
 
             for url in urls {
                 let path = url.standardizedFileURL.path
@@ -198,12 +216,13 @@ struct SWPJunkScanner {
 
         if Task.isCancelled { return [] }
         let items = makeItems(children, location: location)
-        guard !items.isEmpty else { return [] }
+        return disposableGroups(items, category: category, summaryName: summaryName)
+    }
 
+    /// Pure grouping also preserves unknown ownership in folded rows.
+    func disposableGroups(_ items: [SWPItem], category: SWPCategory, summaryName: String) -> [SWPGroup] {
         var groups: [SWPGroup] = []
-        var smallSafe: [SWPItem] = []
-        var smallInUse: [SWPItem] = []
-
+        var small: [SWPConfidence: [SWPItem]] = [:]
         let threshold = Self.individualRowThreshold
         for item in items {
             let confidence = ownership(of: item.url)
@@ -213,26 +232,18 @@ struct SWPJunkScanner {
                                        category: category,
                                        confidence: confidence,
                                        items: [item]))
-            } else if confidence == .inUse {
-                smallInUse.append(item)
             } else {
-                smallSafe.append(item)
+                small[confidence, default: []].append(item)
             }
         }
 
-        if !smallSafe.isEmpty {
-            groups.append(SWPGroup(id: "\(category.rawValue).\(summaryName)",
-                                   name: summaryName,
-                                   category: category,
-                                   confidence: .safe,
-                                   items: smallSafe))
-        }
-        if !smallInUse.isEmpty {
-            groups.append(SWPGroup(id: "\(category.rawValue).\(summaryName).inuse",
-                                   name: summaryName + " · installed apps",
-                                   category: category,
-                                   confidence: .inUse,
-                                   items: smallInUse))
+        for confidence in [SWPConfidence.safe, .likely, .inUse] {
+            guard let items = small[confidence], !items.isEmpty else { continue }
+            let suffix = confidence == .inUse ? " · installed apps"
+                : confidence == .likely ? " · ownership unknown" : ""
+            groups.append(SWPGroup(id: "\(category.rawValue).\(summaryName).\(confidence.rawValue)",
+                                   name: summaryName + suffix, category: category,
+                                   confidence: confidence, items: items))
         }
         return groups
     }

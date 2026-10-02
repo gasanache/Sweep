@@ -1,54 +1,8 @@
 # Sweep
 
-A native macOS cleaner and uninstaller that never deletes, never guesses, and never selects anything for you.
+A native macOS utility for cleaning up app data, uninstalling applications, inspecting recorded permissions, and browsing local AI models and disk usage.
 
-<img src="docs/hero.png" alt="Sweep — scan screen" width="100%">
-
-Sweep finds the files applications leave behind — support folders, containers, caches, preferences, launch agents — works out which ones no longer have an owner, and moves only what **you** tick to the Trash. It also uninstalls apps properly: pick one, see everything it owns, and remove the app and its files together.
-
-**Scan results — evidence labelled, nothing pre-selected:**
-
-<img src="docs/results.png" alt="Scan results" width="100%">
-
-**The uninstaller — pick any installed app:**
-
-<img src="docs/uninstaller.png" alt="Uninstaller" width="100%">
-
-**…and get a removal plan: the app, everything it owns, shared data left alone:**
-
-<img src="docs/uninstall-plan.png" alt="Uninstall plan" width="100%">
-
-## What it finds
-
-| Category | Contents |
-|---|---|
-| **App Leftovers** | Files from apps that are no longer installed, matched by bundle-identifier evidence |
-| **Caches** | Rebuildable cache data — caches of apps you still have are labelled *In Use*, never "safe" |
-| **Logs & Reports** | Third-party logs and crash reports |
-| **Developer Junk** | Xcode derived data, archives, device support, simulator and package-manager caches |
-| **Startup Items** | Launch agents and daemons that are broken or orphaned, plus a read-only list of everything else that loads at login |
-| **Uninstaller** | An app and all of its files in one move — data shared by other installed apps is never touched. Sortable by size or last used; installer receipts and system extensions are flagged, never removed |
-
-## Why it's safe
-
-This is the actual product. Cleaner apps break Macs by guessing; Sweep is built so a wrong guess cannot destroy anything.
-
-- **Trash-only.** Every removal uses the system Trash — recoverable with Put Back. System-level files move to a timestamped folder inside the Trash via a single admin prompt. There is no code path that deletes.
-- **Nothing is auto-selected.** A scan ends with zero ticks. "Select Safe" batches the ownerless, rebuildable tier — one explicit click.
-- **Evidence is labelled.** *Orphaned* (bundle-id proof), *Review* (name match only), *Safe* (no owner, rebuildable), *In Use* (owner still installed). Every path is shown; nothing hides behind a number.
-- **Shared data is untouchable.** Uninstalling Word leaves Office's shared containers alone — and tells you which apps they are shared with. Cross-app licensing SDKs (Paddle, FLEXnet, PACE and friends) are refused outright.
-- **An allow-list policy gate** validates every path twice: when it is proposed, and again at the moment of removal. `/System`, Documents, photo and mail libraries, and Apple's own files are structurally out of reach.
-- **It fails closed.** If the installed-app inventory looks incomplete, inferential scanning refuses to run rather than flag everything.
-- **Evidence beyond app bundles.** Installer receipts and loaded launchd jobs count as proof a vendor is still installed, so driver-and-daemon software with no `.app` — VPN clients, filesystem drivers, audio plug-ins — is never mistaken for a leftover.
-- **Ignore anything, permanently.** Right-click a group to exclude it from every future scan; review or undo the list any time.
-- **Undo the irreversible-looking part.** System files moved with your password go to a dated folder in the Trash with a manifest, and Sweep can put them back.
-- **Honest sizes.** Hard-link-aware, package-aware measurement that agrees with `du`.
-- **No network. At all.** No telemetry, no analytics, no update checks, no
-  crash reporting, no phone-home of any kind. The binary links no networking
-  framework, references no networking symbol, and ships with no network
-  entitlement — this is a property of the build, not a promise in a document.
-  Sweep reads your disk and writes to your Trash; that is the whole of what it
-  touches.
+<img src="docs/hero.png" alt="Sweep scan screen" width="100%">
 
 ## Install
 
@@ -56,11 +10,104 @@ This is the actual product. Cleaner apps break Macs by guessing; Sweep is built 
 brew install --cask gasanache/tap/sweep
 ```
 
-Or download the latest notarized `.dmg` from [Releases](https://github.com/gasanache/Sweep/releases), open it, and drag Sweep to Applications. Universal binary, macOS 15.6+.
+Or download the notarized `.dmg` from [Releases](https://github.com/gasanache/Sweep/releases) and drag Sweep to Applications. Universal binary, macOS 15.6+.
 
-## Building from source
+Update with `brew upgrade --cask sweep` or download a newer release. Sweep has no built-in updater.
 
-Requires macOS 15.6 or newer and Xcode 26.
+## Scan
+
+One scan checks these categories and discovers common AI locations. Cleaner findings start unselected; you choose what to remove.
+
+| Category | Contents |
+|---|---|
+| **App Leftovers** | Support folders, containers and preferences attributed to apps no longer installed |
+| **Caches** | Rebuildable caches, with installed owners labelled *In Use* |
+| **Logs & Reports** | Third-party logs and crash reports |
+| **Developer Data** | Xcode data, simulator data and package-manager caches |
+| **Startup Items** | Broken or orphaned launch agents and daemons; other startup entries are read-only |
+| **AI & Models** | Model candidates, shared caches and assistant data; discovery is read-only |
+
+Search by name or path, filter by size and ownership evidence, and expand a group to inspect its paths. Selection commands affect the visible results; hidden selections are counted separately. Rescans retain still-valid selections. Dates describe modification, not usage.
+
+<img src="docs/results.png" alt="Cleanup results with ownership evidence and unselected groups" width="100%">
+
+## Uninstaller
+
+Find an app by name, size or last use, then choose **Review**. The plan separates attributed files from name-only matches and data shared with other installed apps. Shared data is excluded; installer receipts and system extensions are flagged rather than removed.
+
+<img src="docs/uninstaller.png" alt="Full-width installed-app table" width="100%">
+
+<details>
+<summary>Example removal plan</summary>
+
+<img src="docs/uninstall-plan.png" alt="App removal plan with shared data left alone" width="100%">
+
+</details>
+
+## App Permissions
+
+Browse the full-width app list, then choose **Inspect** or double-click a row. **Back to Apps** returns to the list with your search, filters and selection intact. Apple apps are hidden by default; the filter can include them or show installed and recorded-only clients separately. **Add app** includes an application outside the usual Applications folders.
+
+<img src="docs/privacy.png" alt="Full-width App Permissions list with Inspect actions" width="100%">
+
+Permission details show recorded decisions and their sources, not verified current access. Expand a category to inspect individual records and Automation targets. Missing or unreadable records mean **unknown**, not denied. Full Disk Access may be needed to read protected records; recent decisions may be absent from checkpointed database snapshots.
+
+- **Change access in System Settings.** Sweep opens the relevant macOS controls. It does not provide fake permission switches or write to protected permission databases.
+- **Reset decisions** for one app from its details, or choose **Reset across apps** from the toolbar’s advanced menu. Confirm the category, app identifier and account scope. Copies of an app with the same bundle identifier share that scope.
+- All-app and all-account resets require typing `RESET`. The default is the current account; resetting across accounts requires macOS administrator authorization. A failed operation never falls back to a broader reset.
+- A reset removes allowed and denied decisions so apps may ask again. **There is no undo.** Managed policies and controls outside TCC are not reset. Local Network, Location Services, notifications and other controls may need their own Settings pages.
+
+<details>
+<summary>Recorded permission details</summary>
+
+<img src="docs/privacy-detail.png" alt="Recorded permission decisions with System Settings as the primary action" width="100%">
+
+</details>
+
+## AI & Models
+
+Search and sort a read-only inventory of model-file candidates, repositories, shared caches and assistant data. Common locations include LM Studio, Ollama, Hugging Face, MLX, PyTorch, Jan, GPT4All and Msty, plus Codex, ChatGPT, Claude Code, Cursor, Gemini CLI and OpenCode.
+
+Use **Add folder…** to inspect another location for the current session. Discovery reads metadata, not model contents, credentials or conversations. It does not execute discovered tools, follow symbolic links or download cloud-only files. Coverage limits and unknown measurements remain visible; this is not a whole-disk search.
+
+<img src="docs/ai-models.png" alt="Read-only AI inventory with model candidates and assistant data" width="100%">
+
+Discovery is **not a cleanup recommendation**. AI findings stay outside cleanup totals and bulk selection. Known assistant/model locations and added inspection roots are protected from generic removal, including their aggregate parents. Added roots remain protected until Sweep quits, even after you stop inspecting them.
+
+### LM Studio and Ollama cleanup
+
+**Cleanup reviews** is a separate workflow for these two products, also used when selecting them in Uninstaller. Review exact paths, runtime/service checks, shell-profile changes and Homebrew packages before proceeding. Unknown ownership, unsupported package instructions and running runtimes can block removal.
+
+Approved data and app bundles go to Trash; approved Homebrew package removal is permanent. Custom model folders and shared Hugging Face caches are preserved. Models, chats, settings and credentials inside an approved product folder are included in its removal, so keep anything you still need. File recovery does not reinstall packages; shell-profile backups require manual recovery.
+
+## Storage Explorer
+
+Choose a folder to browse its largest children, sort entries, follow breadcrumbs or reveal a path in Finder. Double-click or press Return to browse; use the left arrow or **⌘[** to go back. Nothing here is selected for cleanup.
+
+<img src="docs/storage.png" alt="Read-only storage table showing allocated sizes" width="100%">
+
+The scan does not follow links, cross filesystem boundaries or download cloud-only files. Packages are measured as units and hard links are counted once. Unreadable entries and traversal limits are reported as partial coverage. **Rescan** refreshes the dated snapshot; allocated sizes are not estimates of reclaimable space.
+
+*Screenshots use fictional example data.*
+
+## Removal and recovery
+
+- **Review before removal.** Confirmations freeze the complete selection and show exact paths, including selections outside the current filter. Cancelling performs no removal.
+- **Ownership matters.** Bundle identifiers, installed apps, receipts and loaded jobs inform attribution. Name-only matches require review. Incomplete inventories do not turn unknown ownership into a safe finding.
+- **Protected paths stay protected.** An allow-list is checked when a target is proposed and again before removal. Shared data, protected libraries and linked ancestry are refused. Right-click a group to ignore it in future scans.
+- **Files go to Trash.** User moves use no-follow directory descriptors and exclusive renames, with recovery intent saved before mutation. Cross-volume moves are refused rather than copied and deleted. Live filesystem changes are not an atomic-snapshot guarantee.
+- **Restore Last Batch** restores supported files from the newest nonempty batch without overwriting existing files. Recovery works after relaunch. Some administrator-owned locations require manual recovery; Finder’s Put Back metadata is not created.
+- **Some actions are irreversible.** Homebrew package removal, simulator deletion and permission resets are separate, explicit operations. Restoring a startup configuration does not reload its job. Partial failures and unknown outcomes remain visible.
+- **Trash still uses disk space.** Allocated sizes account for hard links but cannot promise savings from APFS clones, compression or snapshots.
+- **No telemetry or model downloads.** Approved Homebrew operations may use Homebrew’s own network access and caches; Sweep disables its automatic updates, analytics, autoremove and incidental install cleanup for those commands.
+
+## Interface
+
+Scan and Tools have separate navigation sections. The interface supports light and dark appearances, native keyboard selection, system scrollbar preferences and Reduce Motion. The default window is **1044 × 667 points**; resizing and normal macOS window restoration remain enabled.
+
+## Build
+
+Requires macOS 15.6+ and Xcode 26.
 
 ```sh
 git clone https://github.com/gasanache/Sweep.git
@@ -69,42 +116,40 @@ cd Sweep
 ./build.sh --install    # copy to /Applications
 ```
 
-Or open `Sweep.xcodeproj` and hit Run. The app is **not sandboxed** — a cleaner has to read `~/Library` — so it ships with Hardened Runtime and Developer ID signing instead. It is not App Store-eligible by design.
+`build.sh` requires a configured Developer ID signing identity. It verifies the signature before replacing `build/Sweep.app` and preserves versioned release folders. For your own signing setup, open `Sweep.xcodeproj` and run the Sweep scheme.
+
+Sweep is not sandboxed because it needs to inspect application data in `~/Library`. Distributed builds use Hardened Runtime and Developer ID signing.
 
 ## Tests
 
 ```sh
-xcodebuild test -project Sweep.xcodeproj -scheme Sweep -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO
+xcodebuild test -project Sweep.xcodeproj -scheme Sweep \
+  -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO
+./Scripts/verify.sh --compile-only
+./Scripts/verify-workflows.sh
 ```
 
-53 unit tests pin the parts that must never regress: the safety policy's refusals, orphan matching against real-world false positives, the uninstaller's shared-data classifier, quarantine name collisions and manifests, cancellation propagation, and the selection policy.
+Tests cover ownership matching, removal/refusal policy, recovery, stale workers, partial outcomes, privacy scope, read-only discovery and UI store state. Mutation tests use isolated fixtures, not real applications, packages or permissions. Administrator authorization and recovery compatibility also need integration testing on a suitable test system.
 
-```sh
-./Scripts/verify.sh
-```
-
-The ground-truth harness compiles the real scanners into a command-line tool and runs them against the machine you invoke it on, asserting what unit tests cannot: that every proposed path passes the safety policy, that nothing an installed app or toolchain owns is ever presented as a leftover, and that uninstall plans never offer another app's shared data. It is read-only and removes nothing.
+Run `./Scripts/verify.sh` without `--compile-only` for read-only checks against the current machine’s ownership inventory and uninstall plans. It removes nothing and deletes its temporary executable on exit.
 
 ## Command line
 
+Build the **SweepCLI** scheme for the optional read-only CLI:
+
 ```sh
-sweep scan            # what a scan would find
-sweep plan <app>      # what uninstalling an app would remove
-sweep verify          # assert every finding passes the safety policy
+sweep scan
+sweep plan <app>
+sweep verify
+sweep ai --json
+sweep ai /path/to/models --json
+sweep local-ai --json
 ```
 
-Add `--json` to any of them. The CLI is **read-only by design** — it has no removal verb, because everything destructive in Sweep is gated on a person reading a list and ticking rows.
-
-## Updates
-
-There is no updater. New versions appear on the [Releases](https://github.com/gasanache/Sweep/releases) page, or `brew upgrade --cask sweep` if you installed it that way.
-
-## Roadmap
-
-- Translations — the interface is fully string-catalogued and exports cleanly; it needs a human translator, not a machine
+All commands support `--json`. The CLI has no removal verb. `ai` inspects metadata; `local-ai` prepares LM Studio/Ollama cleanup plans without executing them.
 
 ## License
 
-[GPL-3.0](LICENSE). Chosen deliberately: Sweep's whole pitch is that you can read the source and verify it never deletes anything — so forks have to keep their source readable too.
+[GPL-3.0](LICENSE). Some workflow ideas were inspired by [PureMac](https://github.com/momenbasel/PureMac/) ([MIT](https://github.com/momenbasel/PureMac/blob/main/LICENSE)); the implementation is independent, with no upstream code or assets copied.
 
 © 2026 George Asanache

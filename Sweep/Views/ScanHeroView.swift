@@ -28,6 +28,15 @@ struct SWPScanHeroView: View {
     }
 
     var body: some View {
+        GeometryReader { geometry in
+            ScrollView {
+                content.frame(minHeight: geometry.size.height)
+            }
+            .scrollBounceBehavior(.basedOnSize)
+        }
+    }
+
+    private var content: some View {
         VStack(spacing: 0) {
             Spacer()
 
@@ -58,11 +67,12 @@ struct SWPScanHeroView: View {
                 .frame(height: 22)
 
             if !isScanning {
-                Text("Sweep reads your Library and works out what no longer has an\nowner. Nothing is ever selected for you — you tick, and what you\ntick goes to the Trash, never straight to deletion.")
+                Text("One scan checks cleanup categories and AI locations.\nReview findings before choosing anything to remove.")
                     .font(SWPTheme.Fonts.body)
                     .foregroundStyle(SWPTheme.Colors.textDim)
                     .multilineTextAlignment(.center)
                     .lineSpacing(3)
+                    .fixedSize(horizontal: false, vertical: true)
                     .padding(.top, 6)
             }
 
@@ -162,7 +172,7 @@ struct SWPScanHeroView: View {
                     .font(SWPTheme.Fonts.caption)
                     .foregroundStyle(SWPTheme.Colors.accent)
                 Text("·").foregroundStyle(SWPTheme.Colors.textDim)
-                Button("Uninstaller") { engine.isUninstallerActive = true }
+                Button("Uninstaller") { engine.destination = .uninstaller }
                     .buttonStyle(.plain)
                     .font(SWPTheme.Fonts.caption)
                     .foregroundStyle(SWPTheme.Colors.accent)

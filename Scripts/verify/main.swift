@@ -62,21 +62,19 @@ print("\n=== FALSE POSITIVES ===")
 // Only inferential categories: nothing owned by installed software or a
 // toolchain may be presented as the leftovers of a deleted app.
 let inferential = all.filter { $0.category == .leftovers || $0.category == .startup }
-let forbidden = ["cisco", "anyconnect", "ihg", "versa", "vsg", "radiogarden", "premiumsoft",
-                 "navicat", "logic", "garageband", "microsoft", "onedrive", "chrome",
-                 "google", "steam", "wireshark", "cloudflare", "warp", "paragon",
-                 "crystalidea", "macsfancontrol", "protonvpn", "razer", "geoservices",
-                 "cloudkit", "staticcheck", "playwright", "swiftpm", "paddle", "flexnet",
-                 "setapp", "mobilemeaccounts"]
+// Attribute each finding using this machine's inventory. A hardcoded vendor
+// substring is not evidence that a particular client is still installed.
 var hits: Set<String> = []
 for group in inferential {
-    let hay = (group.name + " " + group.items.map(\.url.path).joined(separator: " ")).lowercased()
-    for needle in forbidden where hay.contains(needle) {
-        hits.insert("\(needle) → \(group.name) [\(group.category.rawValue)]")
+    for item in group.items {
+        let canonical = SWPMatch.canonicalName(item.url.lastPathComponent).name
+        if inventory.owns(canonical) {
+            hits.insert("\(canonical) → \(group.name) [\(group.category.rawValue)]")
+        }
     }
 }
-check(hits.isEmpty, "\(hits.count) installed/toolchain items presented as leftovers")
-print(hits.isEmpty ? "  PASS — nothing installed is presented as a leftover" : "  FAIL")
+check(hits.isEmpty, "\(hits.count) inventory-owned items presented as leftovers")
+print(hits.isEmpty ? "  PASS — no findings conflict with available ownership evidence" : "  FAIL")
 for hit in hits.sorted() { print("    \(hit)") }
 
 print("\n=== IN-USE LABELLING ===")
@@ -89,8 +87,9 @@ print("\n=== UNINSTALL PLANS ===")
 let apps = SWPInstalledApps.list()
 print("  uninstallable apps: \(apps.count)")
 var planned = 0
-for app in apps.prefix(40) {
-    let plan = SWPResidueFinder(app: app).buildPlan()
+let attribution = SWPInstalledApps.listForAttribution()
+for app in apps {
+    let plan = SWPResidueFinder(app: app).buildPlan(others: attribution)
     planned += 1
     for item in plan.exclusive + plan.nameMatches {
         check(SWPSafety.validate(item.url).isAllowed,

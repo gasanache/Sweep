@@ -27,7 +27,9 @@ enum SweepCLI {
         case "scan":    scan(json: json)
         case "plan":    plan(app: operand, json: json)
         case "apps":    apps(json: json)
-        case "verify":  verify()
+        case "verify":  verify(json: json)
+        case "local-ai": localAI(json: json)
+        case "ai": ai(folder: operand, json: json)
         case "help", "--help", "-h": usage()
         default:
             // An unrecognised verb is a usage error, not a success.
@@ -39,6 +41,64 @@ enum SweepCLI {
     }
 
     // MARK: Commands
+
+    private static func ai(folder: String?, json: Bool) {
+        let inventory = SWPAIInventoryScanner(additionalFolders: folder.map { [URL(fileURLWithPath: $0)] } ?? []).scan()
+        if json { emit(encode(inventory)); return }
+        print("Sweep — AI & Models (read-only)\n\(inventory.summary)\n")
+        for finding in inventory.findings {
+            print("\(finding.product) · \(finding.kind.rawValue) · \(finding.sizeText)")
+            print("   \(finding.url.path)")
+            if !finding.note.isEmpty { print("   \(finding.note)") }
+        }
+        print("")
+        for note in inventory.notes { print(note) }
+    }
+
+    private static func encode(_ inventory: SWPAIInventory) -> [String: Any] {
+        ["readOnly": true, "partial": inventory.isPartial,
+         "checkedLocations": inventory.checkedLocations, "locationCount": inventory.locationCount,
+         "modelCandidateCount": inventory.modelCount, "notes": inventory.notes,
+         "findings": inventory.findings.map { finding -> [String: Any] in
+             ["path": finding.url.path, "product": finding.product, "kind": finding.kind.rawValue,
+              "allocatedBytes": finding.allocatedBytes.map { $0 as Any } ?? NSNull(),
+              "partial": finding.isPartial, "note": finding.note]
+         }]
+    }
+
+    private static func localAI(json: Bool) {
+        let plans = SWPLocalAIScanner().scan()
+        if json {
+            emit(["products": plans.map { plan -> [String: Any] in
+                ["name": plan.product.name, "installed": plan.isInstalled,
+                 "bytes": plan.sizeBytes, "items": plan.items.map(encode),
+                 "applications": plan.appURLs.map(\.path),
+                 "shellProfiles": plan.shellProfiles.map(\.path),
+                 "packages": plan.brewPackages.map {
+                     ["name": $0.token, "cask": $0.isCask, "prefix": $0.prefix.path,
+                      "versions": $0.installedVersions] as [String: Any]
+                 },
+                 "blockers": plan.blockers, "notes": plan.notes]
+            }])
+            return
+        }
+        print("Sweep — Local AI (read-only)\n")
+        for plan in plans {
+            print("\(plan.product.name) — \(plan.isInstalled ? "Installed" : "Not installed"), \(SWPBytes.string(plan.sizeBytes))")
+            for item in plan.items {
+                print("   \(item.displayPath)  \(SWPBytes.string(item.sizeBytes))")
+            }
+            for app in plan.appURLs { print("   Application: \(app.path)") }
+            for package in plan.brewPackages {
+                print("   Homebrew \(package.isCask ? "cask" : "formula"): \(package.token) (\(package.prefix.path))")
+            }
+            for profile in plan.shellProfiles { print("   LM Studio shell entry: \(profile.path)") }
+            for blocker in plan.blockers { print("   BLOCKED: \(blocker)") }
+            for note in plan.notes { print("   \(note)") }
+            print("")
+        }
+        print("Review supported cleanup in the app's AI & Models screen. The CLI never removes anything.")
+    }
 
     private static func scan(json: Bool) {
         let inventory = SWPAppInventory.build()
@@ -53,13 +113,15 @@ enum SweepCLI {
         let logs = junk.scanLogs { _ in }
         let startup = SWPStartupScanner(inventory: inventory).scan { _ in }
         let groups = orphans + developer + caches + logs + startup.groups
+        let aiInventory = SWPAIInventoryScanner().scan()
 
         if json {
             emit(["appsInventoried": inventory.appCount,
                   "inventoryTrustworthy": inventory.isTrustworthy,
                   "totalBytes": groups.reduce(0) { $0 + $1.sizeBytes },
                   "unreadable": unreadable,
-                  "groups": groups.map(encode)])
+                  "groups": groups.map(encode),
+                  "aiInventory": encode(aiInventory)])
             return
         }
 
@@ -75,7 +137,8 @@ enum SweepCLI {
             if inCategory.count > 8 { print("   … \(inCategory.count - 8) more") }
             print("")
         }
-        print("Total: \(SWPBytes.string(groups.reduce(0) { $0 + $1.sizeBytes }))")
+        print("Cleanup findings: \(SWPBytes.string(groups.reduce(0) { $0 + $1.sizeBytes }))")
+        print("AI & Models (inspection only): \(aiInventory.summary)\(aiInventory.isPartial ? " · partial coverage" : ""). Run `sweep ai` for details.")
         if !unreadable.isEmpty {
             print("\(unreadable.count) location(s) unreadable — grant Full Disk Access for a complete scan.")
         }
@@ -134,7 +197,7 @@ enum SweepCLI {
     }
 
     /// The invariants the harness checks, as a command.
-    private static func verify() {
+    private static func verify(json: Bool) {
         let inventory = SWPAppInventory.build()
         var failures: [String] = []
 
@@ -174,6 +237,11 @@ enum SweepCLI {
             failures.append("listed app refused by the bundle gate: \(app.name)")
         }
 
+        if json {
+            emit(["passed": failures.isEmpty, "appsInventoried": inventory.appCount,
+                  "groups": all.count, "items": all.flatMap(\.items).count, "failures": failures])
+            exit(failures.isEmpty ? 0 : 1)
+        }
         print("inventory: \(inventory.appCount) apps  ·  groups: \(all.count)  ·  items: \(all.flatMap(\.items).count)")
         if failures.isEmpty {
             print("PASS — every finding inside policy, every listed app removable")
@@ -210,7 +278,9 @@ enum SweepCLI {
           sweep scan  [--json]     what a scan would find
           sweep plan <app> [--json] what uninstalling an app would remove
           sweep apps  [--json]     installed apps Sweep can uninstall
-          sweep verify             assert every finding passes the safety policy
+          sweep ai [folder] [--json]  AI tools, shared caches and model candidates (read-only)
+          sweep local-ai [--json]   LM Studio and Ollama cleanup plans
+          sweep verify [--json]    assert every finding passes the safety policy
 
         This tool never removes anything. Use the app to act on what it reports.
         """)

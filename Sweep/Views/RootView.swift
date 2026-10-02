@@ -4,18 +4,25 @@ import SwiftUI
 
 /// Window shell: sidebar, main pane, action bar.
 ///
-/// One window, no tabs, no inspector. The whole product is a three-step
-/// sequence — scan, review, trash — and every extra surface would be somewhere
-/// for that sequence to get lost.
+/// Privacy and Local AI operations have their own stores and never
+/// participate in the cleaner's batch selection or removal state.
 struct SWPRootView: View {
 
     @EnvironmentObject private var engine: SWPScanEngine
-    @Environment(\.openWindow) private var openWindow
+    @EnvironmentObject private var uninstaller: SWPUninstallStore
+    @StateObject private var privacy = SWPPrivacyStore()
+    @StateObject private var localAI = SWPLocalAIStore()
+    @StateObject private var storage = SWPStorageStore()
+
+    private var isMutationInProgress: Bool {
+        localAI.isRemoving || privacy.isResetting || uninstaller.isUninstalling || engine.isMutating
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 0) {
                 SWPSidebarView()
+                    .disabled(isMutationInProgress)
                     .frame(width: SWPTheme.Spacing.sidebarWidth)
 
                 Rectangle()
@@ -24,15 +31,23 @@ struct SWPRootView: View {
 
                 mainPane
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .disabled(isMutationInProgress)
+            }
+
+            if engine.destination != .privacy, engine.destination != .storage,
+               let folder = engine.restorableFolders.first {
+                SWPHairline()
+                recoveryBar(folder: folder)
+                    .disabled(isMutationInProgress || engine.isConfirming)
             }
 
             // Gated on the pane, not on whether anything was found: an empty
             // result hid the action bar entirely, taking the only visible
             // Rescan button with it and leaving no way forward.
-            if !engine.isUninstallerActive,
-               engine.phase == .results || engine.phase == .removing {
+            if engine.destination.isCleanup, engine.phase == .results || engine.phase == .removing {
                 SWPHairline()
                 actionBar
+                    .disabled(engine.isMutating)
             }
         }
         .background(SWPTheme.Colors.background)
@@ -48,35 +63,56 @@ struct SWPRootView: View {
             SWPConfirmSheet()
                 .environmentObject(engine)
         }
-        .onAppear {
-            // Debug affordances for headless UI verification: land on a
-            // specific pane or state without clicking, so every screen can be
-            // exercised and screenshotted from the command line.
-            let arguments = ProcessInfo.processInfo.arguments
-            if arguments.contains("--uninstaller") {
-                engine.isUninstallerActive = true
-            } else if arguments.contains("--scan") {
-                engine.scan()
-            } else if arguments.contains("--about") {
-                openWindow(id: "about")
-            }
+        .onChange(of: engine.destination) { oldValue, newValue in
+            if oldValue == .storage, newValue != .storage { storage.cancel() }
         }
+        .onChange(of: engine.result.aiInventory?.scannedAt) { _, _ in
+            if let snapshot = engine.result.aiInventory { localAI.acceptInventory(snapshot) }
+        }
+        .onChange(of: localAI.additionalFolders) { _, folders in
+            engine.additionalAIFolders = folders
+        }
+        .onChange(of: uninstaller.isUninstalling) { _, active in
+            if !active { engine.refreshRestorable() }
+        }
+        .onChange(of: localAI.isRemoving) { _, active in
+            if !active { engine.refreshRestorable() }
+        }
+        .onAppear { engine.refreshRestorable() }
     }
 
     // MARK: Main pane
 
     @ViewBuilder
     private var mainPane: some View {
-        if engine.isUninstallerActive {
-            SWPUninstallView()
-        } else {
+        switch engine.destination {
+        case .storage:
+            SWPStorageView(store: storage)
+        case .localAI:
+            SWPLocalAIView(store: localAI)
+        case .privacy:
+            SWPPrivacyView(store: privacy)
+        case .uninstaller:
+            SWPUninstallView(onOpenLocalAI: {
+                localAI.showsCleanup = true
+                openLocalAI()
+            })
+        case .cleanup:
             switch engine.phase {
             case .idle, .scanning:
                 SWPScanHeroView()
             case .results, .removing:
-                SWPResultsView()
+                SWPResultsView(onOpenLocalAI: {
+                localAI.showsCleanup = false
+                openLocalAI()
+            })
             }
         }
+    }
+
+    private func openLocalAI() {
+        guard !isMutationInProgress else { return }
+        engine.destination = .localAI
     }
 
     /// Zero-sized buttons that exist only to own keyboard shortcuts.
@@ -88,31 +124,79 @@ struct SWPRootView: View {
     private var shortcutSink: some View {
         ZStack {
             ForEach(Array(SWPCategory.allCases.enumerated()), id: \.element) { index, category in
-                Button("") {
-                    engine.isUninstallerActive = false
-                    engine.selectedCategory = category
-                }
+                Button("") { engine.destination = .cleanup(category) }
                 .keyboardShortcut(KeyEquivalent(Character("\(index + 1)")), modifiers: .command)
             }
-            Button("") { engine.isUninstallerActive = true }
+            Button("") { engine.destination = .uninstaller }
                 .keyboardShortcut("u", modifiers: .command)
-            Button("") { engine.scan() }
+            Button("") { engine.destination = .privacy }
+                .keyboardShortcut("p", modifiers: [.command, .shift])
+            Button("") { refreshCurrentTool() }
                 .keyboardShortcut("r", modifiers: .command)
-                .disabled(engine.phase == .removing)
         }
+        .disabled(isMutationInProgress)
         .opacity(0)
         .frame(width: 0, height: 0)
         .accessibilityHidden(true)
     }
 
+    private func refreshCurrentTool() {
+        guard !isMutationInProgress else { return }
+        switch engine.destination {
+        case .storage: storage.refresh()
+        case .localAI: Task { await localAI.refresh() }
+        case .privacy: Task { await privacy.refresh() }
+        case .uninstaller: uninstaller.refreshApps()
+        case .cleanup: engine.scan()
+        }
+    }
+
+    private func recoveryBar(folder: URL) -> some View {
+        HStack(spacing: SWPTheme.Spacing.row) {
+            Text("Recover files from the latest Trash batch.")
+                .font(SWPTheme.Fonts.caption)
+                .foregroundStyle(SWPTheme.Colors.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 8)
+            Button(engine.isRestoring ? "Restoring" : "Restore Last Batch") {
+                guard !isMutationInProgress, !engine.isConfirming else { return }
+                engine.destination = .cleanup(.leftovers)
+                engine.restore(from: folder)
+            }
+            .buttonStyle(SWPSecondaryButtonStyle())
+            .fixedSize()
+            .help("Restore supported files from \(folder.lastPathComponent). Existing files are never overwritten.")
+        }
+        .padding(.horizontal, SWPTheme.Spacing.pane)
+        .padding(.vertical, 8)
+        .background(SWPTheme.Colors.surface)
+    }
+
     // MARK: Action bar
 
     private var actionBar: some View {
+        let summary = engine.selectionSummary
+        return ViewThatFits(in: .horizontal) {
+            HStack(spacing: SWPTheme.Spacing.section) {
+                selectionSummary(summary).fixedSize(horizontal: true, vertical: false)
+                Spacer(minLength: SWPTheme.Spacing.section)
+                actionButtons(summary).fixedSize()
+            }
+            VStack(alignment: .leading, spacing: SWPTheme.Spacing.row) {
+                selectionSummary(summary)
+                HStack {
+                    Spacer(minLength: 0)
+                    actionButtons(summary).fixedSize()
+                }
+            }
+        }
+        .padding(.horizontal, SWPTheme.Spacing.pane)
+        .padding(.vertical, 12)
+        .background(SWPTheme.Colors.surface)
+    }
+
+    private func actionButtons(_ summary: SWPScanEngine.SelectionSummary) -> some View {
         HStack(spacing: SWPTheme.Spacing.row) {
-            selectionSummary
-
-            Spacer(minLength: SWPTheme.Spacing.section)
-
             if engine.result.trashBytes > 0 {
                 Button {
                     engine.revealTrash()
@@ -124,10 +208,10 @@ struct SWPRootView: View {
                 .help("Open the Trash in Finder")
             }
 
-            if engine.hasUnselectedSafeGroups {
-                Button("Select Safe") { engine.selectAllSafe() }
+            if summary.hasUnselectedSafeShown {
+                Button("Select Safe Shown") { engine.selectAllSafe() }
                     .buttonStyle(SWPSecondaryButtonStyle())
-                    .help("Tick every group marked Safe — rebuildable data with no installed owner. In Use, Orphaned and Review groups are never batch-selected.")
+                    .help("Select only Safe groups shown in this category. Hidden groups and other evidence tiers are left unchanged.")
             }
 
             Button("Rescan") { engine.scan() }
@@ -135,48 +219,53 @@ struct SWPRootView: View {
                 .disabled(engine.phase == .removing)
 
             let isRemoving = engine.phase == .removing
+            let isEmpty = summary.itemCount == 0
             Button {
                 engine.confirmRemoval()
             } label: {
-                Text(isRemoving ? "Removing…"
-                     : engine.selectedItems.isEmpty ? "Nothing Selected" : "Move to Trash")
+                Text(isRemoving ? "Removing"
+                     : isEmpty ? "Nothing Selected" : "Move to Trash")
             }
-            .buttonStyle(SWPPrimaryButtonStyle(isEnabled: !engine.selectedItems.isEmpty && !isRemoving))
-            .disabled(engine.selectedItems.isEmpty || isRemoving)
+            .buttonStyle(SWPPrimaryButtonStyle(isEnabled: !isEmpty && !isRemoving))
+            .disabled(isEmpty || isRemoving)
             .keyboardShortcut(.delete, modifiers: .command)
         }
-        .padding(.horizontal, SWPTheme.Spacing.pane)
-        .padding(.vertical, 12)
-        .background(SWPTheme.Colors.surface)
     }
 
-    private var selectionSummary: some View {
-        HStack(spacing: 7) {
-            let bytes = SWPBytes.split(engine.selectedBytes)
+    private func selectionSummary(_ summary: SWPScanEngine.SelectionSummary) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 7) {
+                let bytes = SWPBytes.split(summary.bytes)
+                let tint = summary.itemCount == 0 ? SWPTheme.Colors.textDim : SWPTheme.Colors.accent
 
-            Text(bytes.value)
-                .font(.system(size: 19, weight: .semibold, design: .rounded).monospacedDigit())
-                .foregroundStyle(engine.selectedItems.isEmpty
-                                 ? SWPTheme.Colors.textDim : SWPTheme.Colors.accent)
-            Text(bytes.unit)
-                .font(SWPTheme.Fonts.heroUnit)
-                .foregroundStyle(engine.selectedItems.isEmpty
-                                 ? SWPTheme.Colors.textDim : SWPTheme.Colors.accent)
-                .padding(.trailing, 3)
+                Text(bytes.value)
+                    .font(.system(size: 19, weight: .semibold, design: .rounded).monospacedDigit())
+                    .foregroundStyle(tint)
+                Text(bytes.unit)
+                    .font(SWPTheme.Fonts.heroUnit)
+                    .foregroundStyle(tint)
+                    .padding(.trailing, 3)
 
-            Text(engine.selectedItems.count == 1
-                 ? "1 item selected" : "\(engine.selectedItems.count) items selected")
-                .font(SWPTheme.Fonts.caption)
-                .foregroundStyle(SWPTheme.Colors.textDim)
-
-            if engine.hiddenSelectedCount > 0 {
-                SWPBadge(text: "\(engine.hiddenSelectedCount) hidden by filter",
-                         tint: SWPTheme.Colors.review)
-                    .help("Selected rows the current filter is hiding. They are still included — clear the filter to see them.")
+                Text(summary.itemCount == 1
+                     ? "1 item selected" : "\(summary.itemCount) items selected")
+                    .font(SWPTheme.Fonts.caption)
+                    .foregroundStyle(SWPTheme.Colors.textDim)
+                if summary.needsAdmin {
+                    SWPBadge(text: "Admin", tint: SWPTheme.Colors.review)
+                }
             }
 
-            if engine.selectionNeedsAdmin {
-                SWPBadge(text: "Admin", tint: SWPTheme.Colors.review)
+            if summary.hiddenGroupCount > 0 {
+                HStack(spacing: 8) {
+                    SWPBadge(text: "\(summary.hiddenGroupCount) group\(summary.hiddenGroupCount == 1 ? "" : "s") outside this view",
+                             tint: SWPTheme.Colors.review)
+                        .help("Selected groups in another category or hidden by filters. They remain included in the removal review.")
+                    Button("Deselect Hidden") { engine.deselectHidden() }
+                        .buttonStyle(.plain)
+                        .font(SWPTheme.Fonts.caption)
+                        .foregroundStyle(SWPTheme.Colors.textSecondary)
+                        .disabled(engine.phase == .removing)
+                }
             }
         }
     }

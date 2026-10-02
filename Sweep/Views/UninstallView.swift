@@ -7,7 +7,7 @@ import AppKit
 struct SWPUninstallView: View {
 
     @EnvironmentObject private var store: SWPUninstallStore
-    @FocusState private var isSearchFocused: Bool
+    let onOpenLocalAI: () -> Void
 
     var body: some View {
         VStack(spacing: 0) {
@@ -22,7 +22,28 @@ struct SWPUninstallView: View {
             }
 
             if let plan = store.plan {
-                SWPUninstallPlanView(plan: plan)
+                if let product = SWPLocalAIScanner.product(forAppBundleID: plan.app.bundleID) {
+                    VStack(alignment: .leading, spacing: SWPTheme.Spacing.section) {
+                        Text(product.name)
+                            .font(SWPTheme.Fonts.title)
+                        Text("Use AI & Models to review hidden model folders, runtimes and shell entries, and safely stop background services before removal.")
+                            .font(SWPTheme.Fonts.body)
+                            .foregroundStyle(SWPTheme.Colors.textSecondary)
+                        HStack {
+                            Button("Back") { store.clearPlan() }
+                                .buttonStyle(SWPSecondaryButtonStyle())
+                            Button("Review in AI & Models") {
+                                store.clearPlan()
+                                onOpenLocalAI()
+                            }
+                                .buttonStyle(SWPPrimaryButtonStyle())
+                        }
+                    }
+                    .padding(SWPTheme.Spacing.pane)
+                    .padding(.top, 20)
+                } else {
+                    SWPUninstallPlanView(plan: plan)
+                }
             } else {
                 picker
             }
@@ -39,28 +60,24 @@ struct SWPUninstallView: View {
 
     private var picker: some View {
         VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text("Uninstaller")
-                    .font(SWPTheme.Fonts.title)
-                    .foregroundStyle(SWPTheme.Colors.textPrimary)
-                Text("Pick an app to see everything it would leave behind. The app and the files you tick move to the Trash together.")
-                    .font(SWPTheme.Fonts.caption)
-                    .foregroundStyle(SWPTheme.Colors.textDim)
+            SWPPageHeader(title: "Uninstaller", subtitle: "Review an app and its files before moving anything to Trash.") {
+                SWPRefreshButton(isBusy: store.isLoadingApps || store.isBuildingPlan) { store.refreshApps() }
+                    .accessibilityIdentifier("uninstaller.refresh")
             }
             .padding(.horizontal, SWPTheme.Spacing.pane)
             .padding(.top, 34)
             .padding(.bottom, SWPTheme.Spacing.section)
 
             HStack(spacing: 8) {
-                searchField
-                Picker("", selection: $store.sortOrder) {
+                SWPSearchField(placeholder: "Search \(store.apps.count) apps", text: $store.query,
+                               identifier: "uninstaller.search")
+                Picker("Sort by", selection: $store.sortOrder) {
                     ForEach(SWPUninstallStore.SortOrder.allCases) { order in
                         Text(order.title).tag(order)
                     }
                 }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .frame(width: 230)
+                .pickerStyle(.menu)
+                .frame(width: 155)
                 .tint(SWPTheme.Colors.accent)
             }
             .padding(.horizontal, SWPTheme.Spacing.pane)
@@ -71,56 +88,90 @@ struct SWPUninstallView: View {
                     .padding(.top, SWPTheme.Spacing.row)
             }
 
-            if store.isLoadingApps {
+            if store.isLoadingApps && store.apps.isEmpty {
+                SWPEmptyState(title: "Finding apps", message: "The app list will appear before sizes finish measuring.", isLoading: true)
                 Spacer()
-                HStack { Spacer(); ProgressView().controlSize(.small); Spacer() }
+            } else if store.filteredApps.isEmpty {
+                SWPEmptyState(title: store.query.isEmpty ? "No apps found" : "No matching apps",
+                              message: "Try another name or bundle identifier, or refresh the inventory.")
+                    .padding(.top, 30)
+                HStack {
+                    Spacer()
+                    Button(store.query.isEmpty ? "Refresh Apps" : "Clear Search") {
+                        if store.query.isEmpty { store.refreshApps() } else { store.query = "" }
+                    }
+                    .buttonStyle(SWPSecondaryButtonStyle())
+                    .accessibilityIdentifier("uninstaller.empty-action")
+                    Spacer()
+                }
                 Spacer()
             } else {
-                appList
-                    .padding(.top, SWPTheme.Spacing.row)
+                appList.padding(.top, SWPTheme.Spacing.row)
+                HStack {
+                    Text("\(store.filteredApps.count) apps")
+                    Spacer()
+                    Text(store.isMeasuringSizes ? "Measuring app sizes…" : "Select an app, then Review · double-click to open")
+                }
+                .font(SWPTheme.Fonts.caption).foregroundStyle(SWPTheme.Colors.textSecondary)
+                .padding(.horizontal, SWPTheme.Spacing.pane).padding(.vertical, 10)
             }
         }
+        .disabled(store.isBuildingPlan)
         .overlay { if store.isBuildingPlan { measuringOverlay } }
-    }
-
-    private var searchField: some View {
-        HStack(spacing: 7) {
-            Image(systemName: "magnifyingglass")
-                .font(.system(size: 11))
-                .foregroundStyle(SWPTheme.Colors.textDim)
-            TextField("Search \(store.apps.count) apps", text: $store.query)
-                .textFieldStyle(.plain)
-                .font(SWPTheme.Fonts.body)
-                .foregroundStyle(SWPTheme.Colors.textPrimary)
-                .focused($isSearchFocused)
-            // Zero-sized owner for the shortcut; attaching it to the field
-            // itself would fight the field's own key handling.
-            Button("") { isSearchFocused = true }
-                .keyboardShortcut("f", modifiers: .command)
-                .opacity(0)
-                .frame(width: 0, height: 0)
-                .accessibilityHidden(true)
+        .onChange(of: store.query) { _, _ in
+            if let id = store.selectedAppID, !store.filteredApps.contains(where: { $0.id == id }) {
+                store.selectedAppID = nil
+            }
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 7)
-        .swpCard()
     }
 
     private var appList: some View {
-        ScrollView {
-            LazyVStack(spacing: 2) {
-                ForEach(store.filteredApps) { app in
-                    SWPAppPickerRow(app: app,
-                                    isRunning: store.isRunning(app),
-                                    size: store.size(of: app)) {
-                        store.select(app)
+        Table(store.filteredApps, selection: $store.selectedAppID) {
+            TableColumn("App") { app in
+                HStack(spacing: 8) {
+                    Image(nsImage: NSWorkspace.shared.icon(forFile: app.url.path))
+                        .resizable().frame(width: 24, height: 24).accessibilityHidden(true)
+                    Text(app.name).font(SWPTheme.Fonts.list).lineLimit(1)
+                    if store.isRunning(app) {
+                        Image(systemName: "circle.fill").font(.system(size: 5))
+                            .foregroundStyle(SWPTheme.Colors.safe).accessibilityLabel("Running")
                     }
                 }
+                .frame(minHeight: 32)
+                .help(app.name + "\n" + app.url.path)
             }
-            .padding(.horizontal, SWPTheme.Spacing.pane)
-            .padding(.bottom, SWPTheme.Spacing.pane)
+            TableColumn("Last used") { app in
+                Text(app.lastUsedText).font(SWPTheme.Fonts.caption)
+                    .foregroundStyle(SWPTheme.Colors.textSecondary)
+            }.width(96)
+            TableColumn("App size") { app in
+                Text(store.size(of: app).map(SWPBytes.string) ?? "Unknown")
+                    .font(SWPTheme.Fonts.number).foregroundStyle(SWPTheme.Colors.textSecondary)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+            }.width(74)
+            TableColumn("") { app in
+                Button("Review") { review(app) }
+                    .buttonStyle(.borderless)
+                    .accessibilityLabel("Review files for \(app.name)")
+            }.width(55)
         }
+        .tableStyle(.inset(alternatesRowBackgrounds: false))
         .scrollContentBackground(.hidden)
+        .background(SWPTheme.Colors.surface)
+        .contextMenu(forSelectionType: String.self) { ids in
+            if let app = store.filteredApps.first(where: { ids.contains($0.id) }) {
+                Button("Review files") { review(app) }
+            }
+        } primaryAction: { ids in
+            if let app = store.filteredApps.first(where: { ids.contains($0.id) }) { review(app) }
+        }
+        .accessibilityIdentifier("uninstaller.apps")
+        .padding(.horizontal, SWPTheme.Spacing.pane)
+    }
+
+    private func review(_ app: SWPInstalledApp) {
+        if SWPLocalAIScanner.product(forAppBundleID: app.bundleID) != nil { onOpenLocalAI() }
+        else { store.select(app) }
     }
 
     private func statusCard(_ message: String) -> some View {
@@ -141,74 +192,15 @@ struct SWPUninstallView: View {
     private var measuringOverlay: some View {
         VStack(spacing: 8) {
             ProgressView().controlSize(.small)
-            Text("Measuring…")
-                .font(SWPTheme.Fonts.caption)
-                .foregroundStyle(SWPTheme.Colors.textDim)
+            Text("Preparing the removal review")
+                .font(SWPTheme.Fonts.body)
+                .foregroundStyle(SWPTheme.Colors.textSecondary)
+            Button("Cancel") { store.clearPlan() }
+                .buttonStyle(SWPSecondaryButtonStyle())
+                .keyboardShortcut(.cancelAction)
         }
         .padding(18)
         .swpCard(elevated: true)
-    }
-}
-
-// MARK: - Picker row
-
-private struct SWPAppPickerRow: View {
-    let app: SWPInstalledApp
-    let isRunning: Bool
-    let size: Int64?
-    let action: () -> Void
-
-    @State private var isHovering = false
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 9) {
-                Image(nsImage: NSWorkspace.shared.icon(forFile: app.url.path))
-                    .resizable()
-                    .frame(width: 24, height: 24)
-
-                Text(app.name)
-                    .font(SWPTheme.Fonts.rowTitle)
-                    .foregroundStyle(SWPTheme.Colors.textPrimary)
-                    .lineLimit(1)
-
-                if isRunning {
-                    Circle()
-                        .fill(SWPTheme.Colors.safe)
-                        .frame(width: 5, height: 5)
-                        .help("Running")
-                }
-
-                Spacer(minLength: 8)
-
-                Text(app.lastUsedText)
-                    .font(SWPTheme.Fonts.caption)
-                    .foregroundStyle(SWPTheme.Colors.textDim)
-                    .frame(width: 96, alignment: .trailing)
-
-                Text(size.map(SWPBytes.string) ?? "—")
-                    .font(SWPTheme.Fonts.caption.monospacedDigit())
-                    .foregroundStyle(SWPTheme.Colors.textSecondary)
-                    .frame(width: 66, alignment: .trailing)
-
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(SWPTheme.Colors.textDim)
-            }
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel("\(app.name), version \(app.version), \(app.lastUsedText)"
-                                + (isRunning ? ", running" : ""))
-            .accessibilityAddTraits(.isButton)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .background(
-                RoundedRectangle(cornerRadius: SWPTheme.Spacing.radiusRow, style: .continuous)
-                    .fill(isHovering ? SWPTheme.Colors.surfaceHigh : Color.clear)
-            )
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .onHover { isHovering = $0 }
     }
 }
 
@@ -446,8 +438,8 @@ private struct SWPUninstallPlanView: View {
 
             Spacer(minLength: SWPTheme.Spacing.section)
 
-            Button(store.isUninstalling ? "Working…"
-                   : plan.bundleAlreadyTrashed ? "Remove Leftovers…" : "Uninstall…") {
+            Button(store.isUninstalling ? "Working"
+                   : plan.bundleAlreadyTrashed ? "Remove Leftovers" : "Uninstall") {
                 store.isConfirming = true
             }
             .buttonStyle(SWPPrimaryButtonStyle(isEnabled: !store.isUninstalling))
@@ -479,8 +471,8 @@ private struct SWPUninstallConfirmSheet: View {
                         .font(SWPTheme.Fonts.title)
                         .foregroundStyle(SWPTheme.Colors.textPrimary)
                     Text(store.plan?.bundleAlreadyTrashed == true
-                         ? "\(store.tickedItems.count) leftover file\(store.tickedItems.count == 1 ? "" : "s") (\(SWPBytes.string(store.selectedBytes))) move to the Trash — the app is already there. Recoverable with Put Back."
-                         : "The app and \(store.tickedItems.count) file\(store.tickedItems.count == 1 ? "" : "s") (\(SWPBytes.string(store.selectedBytes))) move to the Trash — recoverable with Put Back.")
+                         ? "\(store.tickedItems.count) leftover file\(store.tickedItems.count == 1 ? "" : "s") (\(SWPBytes.string(store.selectedBytes))) move to a Trash batch — the app is already there. Use Restore Last Batch in Sweep or recover files manually."
+                         : "The app and \(store.tickedItems.count) file\(store.tickedItems.count == 1 ? "" : "s") (\(SWPBytes.string(store.selectedBytes))) move to a Trash batch. Use Restore Last Batch in Sweep or recover files manually; Finder’s Put Back is not available.")
                         .font(SWPTheme.Fonts.caption)
                         .foregroundStyle(SWPTheme.Colors.textDim)
                         .fixedSize(horizontal: false, vertical: true)

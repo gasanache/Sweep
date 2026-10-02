@@ -56,6 +56,22 @@ final class SafetyPolicyTests: XCTestCase {
         }
     }
 
+    func testRefusesProtectedDescendantsWithinAllowedRoots() {
+        let paths = [
+            "\(home)/Library/Application Support/MobileSync/Backup/01234567",
+            "\(home)/Library/Application Support/PACE/Licenses/third-party",
+            "\(home)/Library/Containers/com.apple.Notes/Data/Library/example",
+            "\(home)/Library/Caches/CloudKit/accounts/example",
+            "\(home)/Library/Developer/CoreSimulator/Devices/01234567/data",
+            "/Library/Application Support/Logic/Instruments/example",
+            "/Library/Preferences/ByHost/com.example.setting.plist",
+        ]
+        for path in paths {
+            XCTAssertFalse(SWPSafety.validate(URL(fileURLWithPath: path)).isAllowed,
+                           "must refuse protected descendant \(path)")
+        }
+    }
+
     func testRefusesPathsOutsideEveryRoot() {
         for path in ["/tmp/whatever", "/private/var/db/receipts", "\(NSHomeDirectory())/Documents/notes.md"] {
             XCTAssertFalse(SWPSafety.validate(URL(fileURLWithPath: path)).isAllowed,
@@ -141,6 +157,9 @@ final class SafetyPolicyTests: XCTestCase {
             "HTTPStorages/com.example.app",
             "Preferences/com.example.app.plist",
             "Developer/Xcode/DerivedData/Project-abcdef",
+            "Developer/Xcode/Archives/2026-09-22/Example.xcarchive",
+            "Developer/CoreSimulator/Caches/example",
+            "Developer/Xcode/UserData/Previews",
         ]
         for path in allowed {
             let url = library.appendingPathComponent(path)
@@ -161,19 +180,104 @@ final class SafetyPolicyTests: XCTestCase {
 
     // MARK: Symlinks
 
-    /// A link inside an allowed root pointing at `~/Documents` must be refused,
-    /// so that trashing it can never be read as touching the target.
-    func testRefusesSymlinkEscapingAllowedRoots() throws {
+    private func cacheFixture() throws -> URL {
         let caches = URL(fileURLWithPath: home).appendingPathComponent("Library/Caches")
-        let link = caches.appendingPathComponent("swp-test-escape-\(UUID().uuidString)")
-        let target = URL(fileURLWithPath: home).appendingPathComponent("Documents")
-        guard FileManager.default.fileExists(atPath: target.path) else {
-            throw XCTSkip("no ~/Documents on this machine")
-        }
+        let fixture = caches.appendingPathComponent("swp-policy-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: fixture, withIntermediateDirectories: false)
+        addTeardownBlock { try FileManager.default.removeItem(at: fixture) }
+        return fixture
+    }
 
-        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
-        defer { try? FileManager.default.removeItem(at: link) }
+    func testRefusesSymlinkEscapingAllowedRoots() throws {
+        let fixture = try cacheFixture()
+        let alias = fixture.appendingPathComponent("outside")
+        try FileManager.default.createSymbolicLink(
+            at: alias, withDestinationURL: URL(fileURLWithPath: home).appendingPathComponent("Documents"))
 
-        XCTAssertFalse(SWPSafety.validate(link).isAllowed)
+        XCTAssertFalse(SWPSafety.validate(alias).isAllowed)
+        XCTAssertFalse(SWPSafety.validate(alias.appendingPathComponent("example")).isAllowed)
+    }
+
+    func testRefusesSymlinkToProtectedSubtreeAndItsChildren() throws {
+        let fixture = try cacheFixture()
+        let backup = fixture.appendingPathComponent("MobileSync/Backup")
+        let child = backup.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: child, withIntermediateDirectories: true)
+        let alias = fixture.appendingPathComponent("DerivedData")
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: backup)
+
+        XCTAssertTrue(SWPSafety.validate(fixture.appendingPathComponent("ordinary-cache")).isAllowed)
+        XCTAssertFalse(SWPSafety.validate(child).isAllowed)
+        XCTAssertFalse(SWPSafety.validate(alias).isAllowed)
+        XCTAssertFalse(SWPSafety.validate(alias.appendingPathComponent(child.lastPathComponent)).isAllowed)
+    }
+
+    func testRefusesLinkedAncestorsIntoAnotherAllowedRoot() throws {
+        let fixture = try cacheFixture()
+        let destination = URL(fileURLWithPath: home).appendingPathComponent("Library/Logs")
+        let alias = fixture.appendingPathComponent("other-cache")
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: destination)
+        let childName = "swp-policy-missing-\(UUID().uuidString)"
+
+        XCTAssertTrue(SWPSafety.validate(destination.appendingPathComponent(childName)).isAllowed)
+        XCTAssertFalse(SWPSafety.validate(alias).isAllowed)
+        XCTAssertFalse(SWPSafety.validate(alias.appendingPathComponent(childName)).isAllowed)
+    }
+
+    func testRefusesDanglingLinksAndTheirMissingDescendants() throws {
+        let fixture = try cacheFixture()
+        let alias = fixture.appendingPathComponent("dangling")
+        try FileManager.default.createSymbolicLink(
+            at: alias, withDestinationURL: fixture.appendingPathComponent("missing"))
+
+        XCTAssertFalse(SWPSafety.validate(alias).isAllowed)
+        XCTAssertFalse(SWPSafety.validate(alias.appendingPathComponent("missing-child")).isAllowed)
+    }
+
+    func testAppBundleRefusesLinkedRootVendorAndLeaf() throws {
+        let fixture = try cacheFixture()
+        let applications = fixture.appendingPathComponent("Applications")
+        let bundle = applications.appendingPathComponent("Example.app")
+        try FileManager.default.createDirectory(at: bundle, withIntermediateDirectories: true)
+        XCTAssertTrue(SWPSafety.validateAppBundle(bundle, home: fixture).isAllowed)
+
+        let alias = applications.appendingPathComponent("Alias.app")
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: bundle)
+        XCTAssertFalse(SWPSafety.validateAppBundle(alias, home: fixture).isAllowed)
+
+        let vendor = applications.appendingPathComponent("Vendor")
+        try FileManager.default.createSymbolicLink(at: vendor, withDestinationURL: applications)
+        XCTAssertFalse(SWPSafety.validateAppBundle(
+            vendor.appendingPathComponent("Example.app"), home: fixture).isAllowed)
+
+        let otherHome = fixture.appendingPathComponent("other-home")
+        try FileManager.default.createDirectory(at: otherHome, withIntermediateDirectories: false)
+        let linkedRoot = otherHome.appendingPathComponent("Applications")
+        try FileManager.default.createSymbolicLink(at: linkedRoot, withDestinationURL: applications)
+        XCTAssertFalse(SWPSafety.validateAppBundle(
+            linkedRoot.appendingPathComponent("Example.app"), home: otherHome).isAllowed)
+    }
+
+    func testOwnedLocalAIAliasNeverAuthorizesLinkedCacheAncestors() throws {
+        let fixture = try cacheFixture()
+        let cache = fixture.appendingPathComponent("Library/Caches/Homebrew")
+        let downloads = cache.appendingPathComponent("downloads")
+        try FileManager.default.createDirectory(at: downloads, withIntermediateDirectories: true)
+        let downloadName = String(repeating: "a", count: 64) + "--ollama--0.34.2.arm64_tahoe.bottle.tar.gz"
+        let download = downloads.appendingPathComponent(downloadName)
+        try Data("fixture".utf8).write(to: download)
+        let alias = cache.appendingPathComponent("ollama--0.34.2")
+        try FileManager.default.createSymbolicLink(atPath: alias.path, withDestinationPath: "downloads/" + downloadName)
+        XCTAssertTrue(SWPSafety.validateLocalAI(alias, product: .ollama, home: fixture).isAllowed)
+        XCTAssertFalse(SWPSafety.validateLocalAI(alias, product: .lmStudio, home: fixture).isAllowed)
+
+        let otherHome = fixture.appendingPathComponent("other-home")
+        try FileManager.default.createDirectory(at: otherHome, withIntermediateDirectories: false)
+        try FileManager.default.createSymbolicLink(
+            at: otherHome.appendingPathComponent("Library"),
+            withDestinationURL: fixture.appendingPathComponent("Library"))
+        XCTAssertFalse(SWPSafety.validateLocalAI(
+            otherHome.appendingPathComponent("Library/Caches/Homebrew/ollama--0.34.2"),
+            product: .ollama, home: otherHome).isAllowed)
     }
 }

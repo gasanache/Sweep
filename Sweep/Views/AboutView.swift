@@ -104,16 +104,16 @@ struct SWPAboutView: View {
     private var promises: some View {
         VStack(alignment: .leading, spacing: 0) {
             promise(symbol: "trash",
-                    title: "Never deletes",
-                    detail: "Everything goes to the Trash. Put Back always works.")
+                    title: "Files go to the Trash",
+                    detail: "File moves use Trash. Package removal, simulator deletion and privacy resets are separate, irreversible operations.")
             SWPHairline().opacity(0.6)
             promise(symbol: "checkmark.square",
                     title: "Never chooses for you",
-                    detail: "A scan ends with nothing ticked. Every removal is yours.")
+                    detail: "The first scan starts unselected. Rescans retain your selections; you review every removal.")
             SWPHairline().opacity(0.6)
             promise(symbol: "network.slash",
-                    title: "Never goes online",
-                    detail: "No telemetry, no analytics, no update checks. Apple frameworks only.")
+                    title: "No telemetry or update checks",
+                    detail: "Sweep does not download models. Approved Homebrew operations may use Homebrew’s network access.")
         }
         .swpCard()
     }

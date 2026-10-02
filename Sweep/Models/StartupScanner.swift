@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 // MARK: - Startup entry
 
@@ -61,7 +62,7 @@ struct SWPStartupScanner {
 
             for url in children where url.pathExtension == "plist" {
                 if ignored.contains(url.standardizedFileURL.path) { continue }
-                let label = url.deletingPathExtension().lastPathComponent
+                let label = Self.jobLabel(in: url) ?? url.deletingPathExtension().lastPathComponent
                 guard !label.lowercased().hasPrefix("com.apple.") else { continue }
 
                 let program = executablePath(in: url)
@@ -123,12 +124,26 @@ struct SWPStartupScanner {
         return ("Orphaned — no owning app", .confirmed)
     }
 
+    static func jobLabel(in url: URL) -> String? {
+        guard let label = definition(in: url)?["Label"] as? String,
+              label.range(of: #"\A[A-Za-z0-9_.-]+\z"#, options: .regularExpression) != nil else { return nil }
+        return label
+    }
+
+    private static func definition(in url: URL) -> [String: Any]? {
+        let descriptor = open(url.path, O_RDONLY | O_NOFOLLOW_ANY | O_NONBLOCK | O_CLOEXEC)
+        guard descriptor >= 0 else { return nil }
+        let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+        var metadata = stat()
+        guard fstat(descriptor, &metadata) == 0, metadata.st_mode & S_IFMT == S_IFREG,
+              metadata.st_size <= 1_048_576,
+              let data = try? handle.read(upToCount: 1_048_577), data.count <= 1_048_576 else { return nil }
+        return try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
+    }
+
     /// `Program`, else the first element of `ProgramArguments`.
     private func executablePath(in url: URL) -> String? {
-        guard let data = try? Data(contentsOf: url),
-              let plist = try? PropertyListSerialization.propertyList(from: data, format: nil)
-                as? [String: Any] else { return nil }
-
+        guard let plist = Self.definition(in: url) else { return nil }
         if let program = plist["Program"] as? String { return program }
         if let arguments = plist["ProgramArguments"] as? [String] { return arguments.first }
         return nil

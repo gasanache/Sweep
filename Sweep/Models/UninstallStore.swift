@@ -20,6 +20,13 @@ final class SWPUninstallStore: ObservableObject {
 
     @Published private(set) var apps: [SWPInstalledApp] = []
     @Published private(set) var isLoadingApps = false
+    @Published private(set) var isMeasuringSizes = false
+    @Published var selectedAppID: String?
+    private var hasLoadedApps = false
+    private var inventoryGeneration = 0
+    private var inventoryTask: Task<Void, Never>?
+    private let loadApps: @Sendable () -> [SWPInstalledApp]
+    private let measureApps: @Sendable ([SWPInstalledApp]) -> [String: Int64]
     @Published private(set) var runningBundleIDs: Set<String> = []
     @Published var query = ""
     /// Bundle sizes, filled in lazily after the list appears.
@@ -44,8 +51,32 @@ final class SWPUninstallStore: ObservableObject {
     @Published var tickedIDs: Set<String> = []
     @Published var isConfirming = false
     @Published private(set) var statusMessage: String?
+    @Published private(set) var lastOutcome: SWPRemovalOutcome?
 
-    private let removal = SWPRemovalService()
+    private let buildPlan: @Sendable (SWPInstalledApp) -> SWPUninstallPlan
+    private let removePlan: @Sendable (SWPUninstallPlan, [SWPItem]) -> SWPRemovalOutcome
+    private var planTask: Task<Void, Never>?
+
+    init(buildPlan: @escaping @Sendable (SWPInstalledApp) -> SWPUninstallPlan = { SWPResidueFinder(app: $0).buildPlan() },
+         removePlan: (@Sendable (SWPUninstallPlan, [SWPItem]) -> SWPRemovalOutcome)? = nil,
+         loadApps: @escaping @Sendable () -> [SWPInstalledApp] = { SWPInstalledApps.list() },
+         measureApps: @escaping @Sendable ([SWPInstalledApp]) -> [String: Int64] = { apps in
+             let sizes = SWPDiskSize.sizes(of: apps.map(\.url))
+             return Dictionary(uniqueKeysWithValues: zip(apps.map(\.id), sizes))
+         }) {
+        self.loadApps = loadApps
+        self.measureApps = measureApps
+        self.buildPlan = buildPlan
+        self.removePlan = removePlan ?? { plan, items in
+            let removal = SWPRemovalService()
+            if plan.bundleAlreadyTrashed {
+                var outcome = removal.trash(items)
+                outcome.merge(removal.trashWithAuthorisation(items))
+                return outcome
+            }
+            return removal.uninstall(bundle: plan.appItem, residues: items)
+        }
+    }
     /// Identifies the plan build in flight. The detached build used to write
     /// `plan`/`tickedIDs` on completion with only a `guard let self`, so a
     /// slower first build could land on top of a newer one — or repopulate a
@@ -77,22 +108,37 @@ final class SWPUninstallStore: ObservableObject {
     func size(of app: SWPInstalledApp) -> Int64? { appSizes[app.id] }
 
     func loadAppsIfNeeded() {
-        guard apps.isEmpty, !isLoadingApps else { return }
+        guard !hasLoadedApps else { return }
+        refreshApps()
+    }
+
+    /// Refresh only the picker. Never replace or silently rebuild a reviewed plan.
+    func refreshApps() {
+        guard !isLoadingApps, !isBuildingPlan, !isUninstalling, !isConfirming, plan == nil else { return }
+        inventoryGeneration += 1
+        let generation = inventoryGeneration
+        inventoryTask?.cancel()
         isLoadingApps = true
+        isMeasuringSizes = false
         refreshRunning()
-        Task.detached(priority: .userInitiated) {
-            let list = SWPInstalledApps.list()
-            await MainActor.run { [weak self] in
-                self?.apps = list
-                self?.isLoadingApps = false
+        let load = loadApps
+        let measure = measureApps
+        inventoryTask = Task { [weak self] in
+            let list = await Task.detached(priority: .userInitiated) { load() }.value
+            guard let self, self.inventoryGeneration == generation, !Task.isCancelled else { return }
+            self.apps = list
+            self.hasLoadedApps = true
+            self.isLoadingApps = false
+            if let selected = self.selectedAppID, !list.contains(where: { $0.id == selected }) {
+                self.selectedAppID = nil
             }
-            // Sizes come second, at utility priority: measuring 70 bundles
-            // takes seconds, and the list must be usable immediately.
-            let sizes = SWPDiskSize.sizes(of: list.map(\.url))
-            let mapped = Dictionary(uniqueKeysWithValues: zip(list.map(\.id), sizes))
-            await MainActor.run { [weak self] in
-                self?.appSizes = mapped
-            }
+            self.appSizes = self.appSizes.filter { entry in list.contains { $0.id == entry.key } }
+            self.isMeasuringSizes = true
+            let sizes = await Task.detached(priority: .utility) { measure(list) }.value
+            guard self.inventoryGeneration == generation, !Task.isCancelled else { return }
+            self.appSizes = sizes
+            self.isMeasuringSizes = false
+            self.inventoryTask = nil
         }
     }
 
@@ -108,24 +154,7 @@ final class SWPUninstallStore: ObservableObject {
     // MARK: Plan
 
     func select(_ app: SWPInstalledApp) {
-        guard !isBuildingPlan, !isUninstalling else { return }
-        planToken += 1
-        let token = planToken
-        isBuildingPlan = true
-        statusMessage = nil
-        refreshRunning()
-        Task.detached(priority: .userInitiated) {
-            let plan = SWPResidueFinder(app: app).buildPlan()
-            await MainActor.run { [weak self] in
-                guard let self, self.planToken == token, !self.isUninstalling else { return }
-                self.plan = plan
-                // The documented exception to zero-auto-selection: the user
-                // explicitly picked this app, so its provably-exclusive files
-                // start ticked — that is the product. Name matches never do.
-                self.tickedIDs = Set(plan.exclusive.map(\.id))
-                self.isBuildingPlan = false
-            }
-        }
+        startPlan(for: app, alreadyTrashed: false)
     }
 
     /// Builds a plan for an app that is *already* in the Trash.
@@ -134,24 +163,34 @@ final class SWPUninstallStore: ObservableObject {
     /// already dealt with it, and re-offering it would be confusing. Only the
     /// residue is on the table.
     func selectTrashedApp(_ app: SWPInstalledApp) {
+        startPlan(for: app, alreadyTrashed: true)
+    }
+
+    private func startPlan(for app: SWPInstalledApp, alreadyTrashed: Bool) {
         guard !isBuildingPlan, !isUninstalling else { return }
         planToken += 1
         let token = planToken
         isBuildingPlan = true
+        plan = nil
+        tickedIDs = []
+        isConfirming = false
         statusMessage = nil
-        Task.detached(priority: .userInitiated) {
-            var plan = SWPResidueFinder(app: app).buildPlan()
-            plan.bundleAlreadyTrashed = true
+        lastOutcome = nil
+        refreshRunning()
+        let buildPlan = self.buildPlan
+        planTask = Task.detached(priority: .userInitiated) { [weak self] in
+            var plan = buildPlan(app)
+            plan.bundleAlreadyTrashed = alreadyTrashed
+            guard !Task.isCancelled else { return }
+            let completed = plan
             await MainActor.run { [weak self] in
                 guard let self, self.planToken == token, !self.isUninstalling else { return }
-                self.plan = plan
-                // Nothing is pre-ticked here. The documented exception to
-                // zero-auto-selection is justified by the user choosing an app
-                // in the uninstaller; a prompt they did not ask for is not
-                // that, and the identity came from a bundle already in the
-                // Trash rather than one they pointed at.
-                self.tickedIDs = []
+                self.plan = completed
+                // Only an explicitly chosen installed app gets exclusive files
+                // preselected. A Trash-watcher suggestion never does.
+                self.tickedIDs = alreadyTrashed ? [] : Set(completed.exclusive.map(\.id))
                 self.isBuildingPlan = false
+                self.planTask = nil
             }
         }
     }
@@ -162,6 +201,9 @@ final class SWPUninstallStore: ObservableObject {
     func clearPlan() {
         guard !isUninstalling else { return }
         planToken += 1          // orphan any build still in flight
+        planTask?.cancel()
+        planTask = nil
+        isBuildingPlan = false
         plan = nil
         tickedIDs = []
         isConfirming = false
@@ -193,7 +235,7 @@ final class SWPUninstallStore: ObservableObject {
     // MARK: Uninstall
 
     func performUninstall() {
-        guard let plan, !isUninstalling else { return }
+        guard let plan, !isUninstalling, !isBuildingPlan else { return }
         if plan.bundleAlreadyTrashed, tickedItems.isEmpty {
             statusMessage = "Nothing selected — tick the leftovers you want removed."
             isConfirming = false
@@ -226,7 +268,7 @@ final class SWPUninstallStore: ObservableObject {
             // Off the main actor: the trash loop and the admin password
             // prompt are blocking, and "Working…" must actually render while
             // they run.
-            let removal = self.removal
+            let removePlan = self.removePlan
             let bundleItem = plan.appItem
             let residueOnly = plan.bundleAlreadyTrashed
             if !residueOnly {
@@ -236,45 +278,41 @@ final class SWPUninstallStore: ObservableObject {
                 NotificationCenter.default.post(name: SWPTrashWatcher.didTrashBundle,
                                                 object: bundleItem.url.lastPathComponent)
             }
-            let outcome = await Task.detached(priority: .userInitiated) { () -> SWPRemovalOutcome in
-                // A bundle already in the Trash is not ours to move — and the
-                // app-bundle gate would refuse a path inside ~/.Trash, which
-                // would surface as a policy error for an action the user never
-                // asked for. Residue only.
-                if residueOnly {
-                    var outcome = removal.trash(items)
-                    if items.contains(where: { $0.requiresAdmin }) {
-                        outcome.merge(removal.trashWithAuthorisation(items))
-                    }
-                    return outcome
-                }
-                return removal.uninstall(bundle: bundleItem, residues: items)
+            let outcome = await Task.detached(priority: .userInitiated) {
+                removePlan(plan, items)
             }.value
             log.info("uninstall \(plan.app.name, privacy: .public): \(outcome.trashedCount) items, \(outcome.trashedBytes) bytes")
 
-            let bundleGone = residueOnly
-                ? outcome.trashedCount > 0
-                : !FileManager.default.fileExists(atPath: plan.app.url.path)
-            if outcome.adminCancelled, !bundleGone {
-                statusMessage = "Authorisation was cancelled — nothing was removed."
-            } else if bundleGone {
-                let count = outcome.trashedCount
-                var message = "Moved \(plan.app.name) to the Trash — \(count) item\(count == 1 ? "" : "s"), \(SWPBytes.string(outcome.trashedBytes)). Recoverable until you empty the Trash."
-                if outcome.adminCancelled {
-                    message += " System-level files were skipped (authorisation cancelled)."
-                }
-                statusMessage = message
-                apps.removeAll { $0.id == plan.app.id }
-                isUninstalling = false   // must precede clearPlan's guard
-                clearPlan()
-            } else if let failure = outcome.failures.first {
-                statusMessage = "Couldn't remove \(plan.app.name): \(failure.reason)"
-            } else if let refused = outcome.refusedByPolicy.first {
-                statusMessage = "The safety policy refused \(refused)."
-            } else {
-                statusMessage = "The app could not be moved to the Trash."
-            }
+            recordOutcome(outcome, for: plan)
             refreshRunning()
+        }
+    }
+
+    private func recordOutcome(_ outcome: SWPRemovalOutcome, for reviewed: SWPUninstallPlan) {
+        lastOutcome = outcome
+        let bundleGone = reviewed.bundleAlreadyTrashed
+            || !FileManager.default.fileExists(atPath: reviewed.app.url.path)
+        var details = outcome.failures.map { "\($0.path): \($0.reason)" }
+            + outcome.refusedByPolicy.map { "Safety policy refused: \($0)" }
+        if outcome.adminCancelled { details.append("Administrator authorization was cancelled; remaining files were not moved.") }
+        if !bundleGone { details.append("The application is still installed.") }
+        let summary = "Moved \(outcome.trashedCount) item\(outcome.trashedCount == 1 ? "" : "s") (\(SWPBytes.string(outcome.trashedBytes))) to the Trash for \(reviewed.app.name)."
+        statusMessage = ([summary] + details).joined(separator: "\n")
+        if bundleGone { apps.removeAll { $0.id == reviewed.app.id } }
+
+        func exists(_ item: SWPItem) -> Bool {
+            // Include dangling links as remaining, refused work as well.
+            (try? FileManager.default.attributesOfItem(atPath: item.url.path)) != nil
+        }
+        let remaining = SWPUninstallPlan(app: reviewed.app, appItem: reviewed.appItem,
+            exclusive: reviewed.exclusive.filter(exists), nameMatches: reviewed.nameMatches.filter(exists),
+            shared: reviewed.shared, bundleAlreadyTrashed: bundleGone, receipts: reviewed.receipts)
+        tickedIDs.formIntersection(Set((remaining.exclusive + remaining.nameMatches).map(\.id)))
+        if bundleGone, details.isEmpty, tickedIDs.isEmpty {
+            isUninstalling = false
+            clearPlan()
+        } else {
+            plan = remaining
         }
     }
 }

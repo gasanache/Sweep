@@ -1,169 +1,113 @@
 import SwiftUI
 
-// MARK: - Sidebar
-
-/// Category rail. Doubles as the scan summary: each row carries its own byte
-/// count, so the split of what was found is legible without clicking through
-/// all five categories.
+/// A native selection outline. Categories share one scan; tools own separate workflows.
 struct SWPSidebarView: View {
-
     @EnvironmentObject private var engine: SWPScanEngine
+
+    private var selection: Binding<SWPDestination?> {
+        Binding(get: { engine.destination }, set: { if let value = $0 { engine.destination = value } })
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            header
-
-            VStack(spacing: 3) {
-                ForEach(SWPCategory.allCases) { category in
-                    row(for: category)
-                }
+            HStack(spacing: 8) {
+                Image(systemName: "wind")
+                    .foregroundStyle(SWPTheme.Colors.accent)
+                    .accessibilityHidden(true)
+                Text("Sweep")
+                    .font(.system(size: 15, weight: .semibold, design: .rounded))
             }
-            .padding(.horizontal, 10)
+            .foregroundStyle(SWPTheme.Colors.textPrimary)
+            .padding(.horizontal, 18)
+            .padding(.top, 40)
+            .padding(.bottom, 16)
 
-            SWPHairline()
-                .opacity(0.6)
-                .padding(.horizontal, 18)
-                .padding(.vertical, 10)
-
-            uninstallerRow
-                .padding(.horizontal, 10)
-
-            Spacer(minLength: SWPTheme.Spacing.section)
-
-            if engine.hasResults {
-                totalPanel
-            }
-        }
-        .frame(maxHeight: .infinity, alignment: .top)
-        .background(SWPTheme.Colors.surface)
-    }
-
-    // MARK: Header
-
-    private var header: some View {
-        // Leaves room for the traffic lights, which float over the content in a
-        // hidden-title-bar window.
-        HStack(spacing: 8) {
-            SWPIconTile(symbol: "wind", size: 22)
-            Text("Sweep")
-                .font(.system(size: 15, weight: .semibold, design: .rounded))
-                .foregroundStyle(SWPTheme.Colors.textPrimary)
-        }
-        .padding(.leading, 14)
-        .padding(.top, 38)
-        .padding(.bottom, SWPTheme.Spacing.section)
-    }
-
-    // MARK: Rows
-
-    private func row(for category: SWPCategory) -> some View {
-        let isSelected = engine.selectedCategory == category && !engine.isUninstallerActive
-        let bytes = engine.result.bytes(in: category)
-        let count = engine.result.groups(in: category).count
-
-        return Button {
-            engine.isUninstallerActive = false
-            engine.selectedCategory = category
-        } label: {
-            HStack(spacing: 9) {
-                SWPIconTile(symbol: category.symbolName,
-                            tint: isSelected ? SWPTheme.Colors.accent : SWPTheme.Colors.textDim,
-                            size: 24)
-
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(category.title)
-                        .font(SWPTheme.Fonts.rowTitle)
-                        .foregroundStyle(isSelected
-                                         ? SWPTheme.Colors.textPrimary
-                                         : SWPTheme.Colors.textSecondary)
-                    if count > 0 {
-                        Text(SWPBytes.string(bytes))
-                            .font(SWPTheme.Fonts.caption)
-                            .foregroundStyle(SWPTheme.Colors.textDim)
+            List(selection: selection) {
+                Section {
+                    ForEach(SWPCategory.allCases) { category in
+                        navigationRow(.cleanup(category))
                     }
+                    navigationRow(.localAI)
+                } header: {
+                    Text("Scan").font(SWPTheme.Fonts.caption).foregroundStyle(SWPTheme.Colors.textSecondary)
                 }
-
-                Spacer(minLength: 4)
-
-                if count > 0 {
-                    Text("\(count)")
-                        .font(SWPTheme.Fonts.caption.monospacedDigit())
-                        .foregroundStyle(SWPTheme.Colors.textDim)
+                Section {
+                    ForEach(SWPDestination.tools, id: \.self) { destination in
+                        navigationRow(destination)
+                    }
+                } header: {
+                    Text("Tools").font(SWPTheme.Fonts.caption).foregroundStyle(SWPTheme.Colors.textSecondary)
                 }
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 7)
-            .background(
-                RoundedRectangle(cornerRadius: SWPTheme.Spacing.radiusRow, style: .continuous)
-                    .fill(isSelected ? SWPTheme.Colors.surfaceHigh : Color.clear)
-            )
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-    }
+            .listStyle(.sidebar)
+            .scrollContentBackground(.hidden)
+            .accessibilityIdentifier("navigation")
 
-    // MARK: Uninstaller
-
-    private var uninstallerRow: some View {
-        let isSelected = engine.isUninstallerActive
-        return Button {
-            engine.isUninstallerActive = true
-        } label: {
-            HStack(spacing: 9) {
-                SWPIconTile(symbol: "app.dashed",
-                            tint: isSelected ? SWPTheme.Colors.accent : SWPTheme.Colors.textDim,
-                            size: 24)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("Uninstaller")
-                        .font(SWPTheme.Fonts.rowTitle)
-                        .foregroundStyle(isSelected
-                                         ? SWPTheme.Colors.textPrimary
-                                         : SWPTheme.Colors.textSecondary)
-                    Text("App + its files")
+            if engine.lastScanDate != nil {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("Last cleanup scan")
+                        .font(SWPTheme.Fonts.caption)
+                        .foregroundStyle(SWPTheme.Colors.textSecondary)
+                    Text("\(SWPBytes.string(engine.result.totalBytes)) in findings")
+                        .font(SWPTheme.Fonts.rowTitle.monospacedDigit())
+                        .foregroundStyle(SWPTheme.Colors.textPrimary)
+                    Text("Allocated size, not freed space")
                         .font(SWPTheme.Fonts.caption)
                         .foregroundStyle(SWPTheme.Colors.textDim)
                 }
-                Spacer(minLength: 4)
+                .padding(16)
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 7)
-            .background(
-                RoundedRectangle(cornerRadius: SWPTheme.Spacing.radiusRow, style: .continuous)
-                    .fill(isSelected ? SWPTheme.Colors.surfaceHigh : Color.clear)
-            )
-            .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .background(SWPTheme.Colors.surface)
     }
 
-    // MARK: Total
-
-    private var totalPanel: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("FOUND")
-                .font(SWPTheme.Fonts.badge)
-                .tracking(0.8)
-                .foregroundStyle(SWPTheme.Colors.textDim)
-
-            let bytes = SWPBytes.split(engine.result.totalBytes)
-            HStack(alignment: .firstTextBaseline, spacing: 4) {
-                Text(bytes.value)
-                    .font(.system(size: 25, weight: .semibold, design: .rounded).monospacedDigit())
-                    .foregroundStyle(SWPTheme.Colors.textPrimary)
-                Text(bytes.unit)
-                    .font(SWPTheme.Fonts.heroUnit)
-                    .foregroundStyle(SWPTheme.Colors.textSecondary)
-            }
-
-            Text("across \(engine.result.appsInventoried) installed apps")
-                .font(SWPTheme.Fonts.caption)
-                .foregroundStyle(SWPTheme.Colors.textDim)
-                .fixedSize(horizontal: false, vertical: true)
+    private func navigationRow(_ destination: SWPDestination) -> some View {
+        let selected = engine.destination == destination
+        let title = Text(destination.title)
+            .font(selected ? SWPTheme.Fonts.rowTitle : SWPTheme.Fonts.list)
+            .lineLimit(1)
+        let size: String?
+        if case .cleanup(let category) = destination,
+           engine.lastScanDate != nil, engine.result.bytes(in: category) > 0 {
+            size = SWPBytes.string(engine.result.bytes(in: category))
+        } else {
+            size = nil
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
-        .swpCard(elevated: true)
-        .padding(.horizontal, 10)
-        .padding(.bottom, 12)
+        return HStack(spacing: 9) {
+            Image(systemName: destination.symbol)
+                .font(.system(size: 14, weight: .regular))
+                .foregroundStyle(selected ? SWPTheme.Colors.accent : SWPTheme.Colors.textSecondary)
+                .frame(width: 18)
+                .accessibilityHidden(true)
+            if let size {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 8) {
+                        title.fixedSize(horizontal: true, vertical: false)
+                        Spacer(minLength: 0)
+                        Text(size).font(SWPTheme.Fonts.caption.monospacedDigit())
+                            .foregroundStyle(SWPTheme.Colors.textSecondary)
+                            .fixedSize()
+                    }
+                    title.frame(maxWidth: .infinity, alignment: .leading)
+                }
+            } else {
+                title.frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .foregroundStyle(SWPTheme.Colors.textPrimary)
+        .frame(minHeight: 24)
+        .padding(.vertical, 1)
+        .background(SWPNeutralListSelection())
+        .tag(destination)
+        .listRowSeparator(.hidden)
+        .listRowBackground(selected ? SWPTheme.Colors.surfaceHigh : Color.clear)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(destination.title)
+        .accessibilityValue(size.map { "\($0) allocated in last scan" } ?? "")
+        .accessibilityAddTraits(selected ? .isSelected : [])
+        .accessibilityIdentifier("navigation." + destination.id)
+        .help(destination.isCleanup && engine.lastScanDate == nil
+              ? "One scan checks cleanup categories and AI locations. Review this category after scanning."
+              : destination.title + (size.map { " · \($0) allocated in last scan" } ?? ""))
     }
 }

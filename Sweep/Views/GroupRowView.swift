@@ -30,7 +30,8 @@ struct SWPGroupRowView: View {
                 pathList
             }
         }
-        .swpCard(elevated: isSelected)
+        .background(isSelected ? SWPTheme.Colors.surfaceHigh : SWPTheme.Colors.surface)
+        .clipShape(RoundedRectangle(cornerRadius: SWPTheme.Spacing.radiusCard))
         .overlay(
             RoundedRectangle(cornerRadius: SWPTheme.Spacing.radiusCard, style: .continuous)
                 .stroke(isSelected ? SWPTheme.Colors.accent.opacity(0.45) : Color.clear,

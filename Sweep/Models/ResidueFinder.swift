@@ -54,7 +54,8 @@ struct SWPResidueClassifier {
                 // Unsigned target: claim a team container only when the
                 // remainder is unmistakably this bundle id.
                 let canonical = SWPMatch.canonicalName(remainder).name.lowercased()
-                return isBundleScoped(canonical) ? .exclusive : .unrelated
+                // Missing signing evidence cannot override a known installed owner.
+                return isBundleScoped(canonical) ? classifyReverseDNS(canonical) : .unrelated
             }
             guard team == teamID else { return .unrelated }   // another developer's data
 
@@ -315,10 +316,10 @@ struct SWPResidueFinder {
         ]
     }
 
-    func buildPlan() -> SWPUninstallPlan {
+    func buildPlan(others: [SWPInstalledApp]? = nil) -> SWPUninstallPlan {
         let classifier = SWPResidueClassifier.make(
             for: app,
-            others: SWPInstalledApps.listForAttribution(),
+            others: others ?? SWPInstalledApps.listForAttribution(),
             teamID: SWPInstalledApps.teamIdentifier(of: app.url))
 
         var exclusive: [(URL, String)] = []

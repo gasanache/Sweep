@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 // MARK: - Verdict
 
@@ -12,14 +13,13 @@ enum SWPSafetyVerdict: Equatable {
 // MARK: - Safety policy
 
 /// The gate every candidate path must pass, twice: once when a scanner
-/// proposes it, and again inside `SWPRemovalService` immediately before the
-/// Trash call.
+/// proposes it, and again inside `SWPRemovalService` before a descriptor-bound
+/// quarantine move.
 ///
-/// Checking twice is not redundancy for its own sake. The scan and the removal
-/// are separated by however long the user spends reading the list, and by a
-/// selection model that could, through a future bug, associate a tick with the
-/// wrong row. Re-validating at the point of destruction means a scanner bug can
-/// only ever produce a *visible* wrong row, never a deleted wrong file.
+/// The scan and the removal are separated by however long the user spends
+/// reading the list. Re-validating rejects paths whose policy has changed;
+/// the removal service must also bind filesystem identity at the mutation
+/// boundary, because a policy verdict alone cannot prevent a concurrent rename.
 ///
 /// The design is allow-list first: a path is refused unless it lives strictly
 /// inside one of `allowedRoots`. Deny-lists alone were the earlier approach and
@@ -66,8 +66,8 @@ enum SWPSafety {
     // MARK: Deny-lists
 
     /// Names that hold real user data or system state even though they sit
-    /// inside an allowed root. Matched case-insensitively on the last path
-    /// component.
+    /// inside an allowed root. Matched case-insensitively on every component
+    /// below that root, not on unrelated ancestors such as the user's name.
     private static let protectedNames: Set<String> = [
         // User data and system state.
         "com.apple.tcc", "mobilesync", "addressbook", "knowledge", "callhistorydb",
@@ -130,7 +130,7 @@ enum SWPSafety {
     ]
 
     /// Paths that must never be removed regardless of anything else. Compared
-    /// after standardisation so `~/Library/../Library` cannot sneak through.
+    /// after lexical normalization so `~/Library/../Library` cannot sneak through.
     private static let protectedExactPaths: Set<String> = {
         var paths: Set<String> = [
             "/", "/System", "/Library", "/Applications", "/Users", "/usr", "/bin",
@@ -141,10 +141,29 @@ enum SWPSafety {
                      "Library/Mail", "Library/Messages", "Library/Safari",
                      "Library/Photos", "Library/Mobile Documents", "Library/Developer",
                      "Library/Developer/Xcode", "Library/Developer/CoreSimulator"] {
-            paths.insert(home.appendingPathComponent(name).standardizedFileURL.path)
+            paths.insert(SWPLocalAIPathIdentity.lexicalURL(home.appendingPathComponent(name)).path)
         }
         return paths
     }()
+
+    /// The developer scanner explicitly offers simulator caches, never Devices
+    /// or other simulator state. This is the only protected-name exception.
+    private static let simulatorCacheRoot = home.appendingPathComponent("Library/Developer/CoreSimulator/Caches")
+
+    private static let localAIProductsByPath: [String: SWPLocalAIProduct] = {
+        var paths: [String: SWPLocalAIProduct] = [:]
+        for product in SWPLocalAIProduct.allCases {
+            for url in SWPLocalAIScanner.homeTargets(for: product, home: home) { paths[url.path] = product }
+        }
+        paths["/opt/homebrew/var/log/ollama.log"] = .ollama
+        paths["/usr/local/var/log/ollama.log"] = .ollama
+        return paths
+    }()
+    private static let aiInventoryPaths = SWPAICatalog.locations(home: home, applicationRoots: [], commandRoots: [],
+                                                                environment: ProcessInfo.processInfo.environment)
+        .map { $0.url.path.lowercased() }
+    private static let sharedModelsPath = home.appendingPathComponent(".cache/huggingface").path
+    private static let brewCachePath = home.appendingPathComponent("Library/Caches/Homebrew").path
 
     // MARK: Validation
 
@@ -153,7 +172,40 @@ enum SWPSafety {
     /// Order matters: cheap structural checks first, filesystem access last, so
     /// that validating thousands of scan candidates stays fast.
     static func validate(_ url: URL) -> SWPSafetyVerdict {
-        let standardized = url.standardizedFileURL
+        validate(url, restoring: false)
+    }
+
+    /// Recovery may put back previously reviewed Local AI and older Homebrew
+    /// batches. This does not authorize new generic removals of those paths.
+    static func validateForRestore(_ url: URL) -> SWPSafetyVerdict {
+        validate(url, restoring: true)
+    }
+
+    /// Dedicated-workflow objects, their descendants, and aggregating cache
+    /// parents cannot be laundered through ordinary cleanup or uninstall.
+    static func requiresLocalAIReview(_ url: URL) -> Bool {
+        let target = SWPLocalAIPathIdentity.lexicalURL(url)
+        // Conservative even on case-sensitive volumes: changing the case of
+        // an app-owned name must not turn a dedicated target into generic junk.
+        let path = target.path.lowercased()
+        if localAIProductsByPath.keys.contains(where: { path == $0.lowercased() || path.hasPrefix($0.lowercased() + "/") }) {
+            return true
+        }
+        let cache = URL(fileURLWithPath: brewCachePath)
+        if [cache.path, cache.appendingPathComponent("downloads").path,
+            cache.appendingPathComponent("Cask").path].map({ $0.lowercased() }).contains(path) { return true }
+        var candidate = target
+        while candidate.path.hasPrefix(brewCachePath + "/") {
+            if SWPLocalAIProduct.allCases.contains(where: {
+                SWPLocalAIScanner.ownsBrewCache(candidate, product: $0, home: home)
+            }) { return true }
+            candidate.deleteLastPathComponent()
+        }
+        return false
+    }
+
+    private static func validate(_ url: URL, restoring: Bool) -> SWPSafetyVerdict {
+        let standardized = SWPLocalAIPathIdentity.lexicalURL(url)
         let path = standardized.path
 
         guard path.hasPrefix("/") else { return .rejected("not an absolute path") }
@@ -167,30 +219,38 @@ enum SWPSafety {
         guard path.rangeOfCharacter(from: .controlCharacters) == nil else {
             return .rejected("path contains control characters")
         }
-        guard !path.contains("..") else { return .rejected("contains a relative traversal") }
+        guard !url.path.contains("..") else { return .rejected("contains a relative traversal") }
         guard path != "/" else { return .rejected("filesystem root") }
 
         if protectedExactPaths.contains(path) {
             return .rejected("protected location")
         }
 
-        // Compared with and without the extension so that both `ByHost` and
-        // `.GlobalPreferences.plist` are caught by one list.
-        let name = standardized.lastPathComponent.lowercased()
-        let bareName = standardized.deletingPathExtension().lastPathComponent.lowercased()
-        if protectedNames.contains(name) || protectedNames.contains(bareName) {
-            return .rejected("holds user or system data")
+        if path == sharedModelsPath || path.hasPrefix(sharedModelsPath + "/") {
+            return .rejected("shared model cache")
         }
 
-        // Apple's own state is out of scope on purpose. Sweep only removes
-        // third-party files: clearing macOS caches wins little space and is the
-        // single most common way these tools break a Mac.
-        // `contains` rather than `hasPrefix` alone: Apple wraps its own
-        // identifiers in several prefixes — `group.`, `systemgroup.`, a team
-        // id — and `systemgroup.com.apple.icloud.searchpartyd` reached the
-        // results list as an orphan of a vendor called "Com" before this.
-        if name.contains("com.apple.") || protectedPrefixes.contains(where: { name.hasPrefix($0) }) {
-            return .rejected("belongs to macOS")
+        if !restoring, requiresLocalAIReview(standardized) {
+            return .rejected("requires the dedicated Local AI review")
+        }
+
+        if !restoring, SWPAIInspectionProtection.shared.protects(standardized) || aiInventoryPaths.contains(where: { root in
+            let candidate = path.lowercased()
+            return candidate == root || candidate.hasPrefix(root == "/" ? "/" : root + "/") || root.hasPrefix(candidate + "/")
+        }) {
+            return .rejected("AI models or sensitive assistant data: inspection only")
+        }
+
+        // These are exact objects, never roots authorising their descendants.
+        // Keep this before the ordinary root rule so even a link from an
+        // app-owned Library path into another allowed cache is refused.
+        if let product = localAIProductsByPath[path] {
+            return validateLocalAI(standardized, product: product)
+        }
+        if path.hasPrefix(brewCachePath + "/") {
+            for product in SWPLocalAIProduct.allCases where SWPLocalAIScanner.ownsBrewCache(standardized, product: product, home: home) {
+                return validateLocalAI(standardized, product: product)
+            }
         }
 
         guard let root = enclosingRoot(of: standardized) else {
@@ -200,16 +260,28 @@ enum SWPSafety {
         // Must be strictly *inside* a root — never the root itself. Removing
         // `~/Library/Caches` wholesale would be catastrophic and is exactly the
         // kind of off-by-one a grouping bug could produce.
-        guard standardized.path != root.standardizedFileURL.path else {
+        guard path != root.path else {
             return .rejected("is an allowed root itself")
         }
 
-        // A symlink is trashed as a link, but if it resolves outside the allowed
-        // set we refuse it: the user's mental model is "this folder", and we do
-        // not want a stray link to imply we touched its target.
-        let resolved = standardized.resolvingSymlinksInPath()
-        if resolved.path != standardized.path, enclosingRoot(of: resolved) == nil {
-            return .rejected("symlink escapes the allowed locations")
+        var protectedBoundary = root
+        if path == simulatorCacheRoot.path || path.hasPrefix(simulatorCacheRoot.path + "/") {
+            protectedBoundary = simulatorCacheRoot.deletingLastPathComponent()
+        }
+        for component in standardized.pathComponents.dropFirst(protectedBoundary.pathComponents.count) {
+            let name = component.lowercased()
+            let bareName = (name as NSString).deletingPathExtension
+            if protectedNames.contains(name) || protectedNames.contains(bareName) {
+                return .rejected("holds user or system data")
+            }
+            // Apple identifiers can be wrapped in group or team prefixes.
+            if name.contains("com.apple.") || protectedPrefixes.contains(where: { name.hasPrefix($0) }) {
+                return .rejected("belongs to macOS")
+            }
+        }
+
+        guard isUnlinkedPath(standardized) else {
+            return .rejected("linked or unreadable path")
         }
 
         return .allowed
@@ -217,10 +289,60 @@ enum SWPSafety {
 
     /// The allowed root that strictly contains `url`, if any.
     private static func enclosingRoot(of url: URL) -> URL? {
-        let path = url.standardizedFileURL.path
+        let path = url.path
         return allowedRoots.first { root in
-            let rootPath = root.standardizedFileURL.path
+            let rootPath = root.path
             return path == rootPath || path.hasPrefix(rootPath + "/")
+        }
+    }
+
+    /// A narrower gate for the dedicated Local AI workflow. Injections permit
+    /// isolated fixtures; the general removal gate always uses production roots.
+    static func validateLocalAI(_ url: URL, product: SWPLocalAIProduct,
+                                home: URL = FileManager.default.homeDirectoryForCurrentUser,
+                                brewPrefixes: [URL] = [URL(fileURLWithPath: "/opt/homebrew"), URL(fileURLWithPath: "/usr/local")]) -> SWPSafetyVerdict {
+        let target = SWPLocalAIPathIdentity.lexicalURL(url)
+        guard target.path.rangeOfCharacter(from: .controlCharacters) == nil,
+              !url.path.contains("..") else { return .rejected("invalid path") }
+        if SWPLocalAIScanner.isOwnedBrewCacheAlias(target, product: product, home: home) {
+            return .allowed
+        }
+        if SWPLocalAIScanner.homeTargets(for: product, home: home).contains(target)
+            || SWPLocalAIScanner.ownsBrewCache(target, product: product, home: home) {
+            return isUnlinkedLocalAIPath(target, within: home)
+                ? .allowed : .rejected("linked or unreadable local AI path")
+        }
+        if product == .ollama, let prefix = brewPrefixes.first(where: {
+            SWPLocalAIPathIdentity.lexicalURL($0.appendingPathComponent("var/log/ollama.log")) == target
+        }) {
+            return isUnlinkedLocalAIPath(target, within: prefix)
+                ? .allowed : .rejected("linked or unreadable Ollama log")
+        }
+        return .rejected("not an exact owned local AI location")
+    }
+
+    /// Scope is lexical; the filesystem check must reject links in the root's
+    /// own ancestry as well as links between the root and the target.
+    static func isUnlinkedLocalAIPath(_ url: URL, within root: URL) -> Bool {
+        let base = SWPLocalAIPathIdentity.lexicalURL(root)
+        let target = SWPLocalAIPathIdentity.lexicalURL(url)
+        guard target == base || target.path.hasPrefix(base.path + "/") else { return false }
+        return isUnlinkedPath(target)
+    }
+
+    /// Darwin checks all components during one lookup, including a linked leaf.
+    /// Missing candidates remain valid policy proposals only when the nearest
+    /// existing ancestor is unlinked. Removal separately requires the object.
+    private static func isUnlinkedPath(_ url: URL) -> Bool {
+        var current = url
+        while true {
+            let descriptor = open(current.path, O_EVTONLY | O_NOFOLLOW_ANY | O_CLOEXEC | O_NONBLOCK)
+            if descriptor >= 0 {
+                close(descriptor)
+                return true
+            }
+            guard errno == ENOENT, current.path != "/" else { return false }
+            current.deleteLastPathComponent()
         }
     }
 
@@ -230,7 +352,7 @@ enum SWPSafety {
     /// fail with `EACCES`, so these are routed through the authorised batch
     /// instead of being attempted and silently failing.
     static func requiresAdmin(_ url: URL) -> Bool {
-        url.standardizedFileURL.path.hasPrefix("/Library/")
+        SWPLocalAIPathIdentity.lexicalURL(url).path.hasPrefix("/Library/")
     }
 
     // MARK: App bundles (uninstaller only)
@@ -244,8 +366,11 @@ enum SWPSafety {
     /// still refuses anything on the system volume, anything nested deeper
     /// than one vendor folder, Safari (SIP-protected despite its location),
     /// and Sweep itself.
-    static func validateAppBundle(_ url: URL) -> SWPSafetyVerdict {
-        let standardized = url.standardizedFileURL
+    static func validateAppBundle(_ url: URL,
+                                  home: URL = FileManager.default.homeDirectoryForCurrentUser) -> SWPSafetyVerdict {
+        let standardized = SWPLocalAIPathIdentity.lexicalURL(url)
+        guard url.path.rangeOfCharacter(from: .controlCharacters) == nil,
+              !url.path.contains("..") else { return .rejected("invalid path") }
         guard standardized.pathExtension == "app" else {
             return .rejected("not an application bundle")
         }
@@ -253,7 +378,7 @@ enum SWPSafety {
         guard !path.hasPrefix("/System/"), !path.hasPrefix("/Library/") else {
             return .rejected("part of macOS")
         }
-        if standardized == Bundle.main.bundleURL.standardizedFileURL {
+        if standardized == SWPLocalAIPathIdentity.lexicalURL(Bundle.main.bundleURL) {
             return .rejected("Sweep cannot uninstall itself")
         }
 
@@ -263,7 +388,7 @@ enum SWPSafety {
         // .localized/`. Anything deeper is not how apps are installed and is
         // refused.
         let parent = standardized.deletingLastPathComponent().path
-        let roots = ["/Applications", NSHomeDirectory() + "/Applications"]
+        let roots = ["/Applications", SWPLocalAIPathIdentity.lexicalURL(home.appendingPathComponent("Applications")).path]
         let insideApplications = roots.contains { root in
             parent == root
                 || (parent.hasPrefix(root + "/")
@@ -271,6 +396,9 @@ enum SWPSafety {
         }
         guard insideApplications else {
             return .rejected("outside the Applications folders")
+        }
+        guard isUnlinkedPath(standardized) else {
+            return .rejected("linked or unreadable application path")
         }
 
         if let bundleID = Bundle(url: standardized)?.bundleIdentifier?.lowercased(),

@@ -4,16 +4,15 @@ import SwiftUI
 
 /// The last screen before anything moves.
 ///
-/// States the exact count, the exact size, and — crucially — that the
-/// destination is the Trash rather than oblivion. Users approach this category
-/// of app braced for an irreversible mistake, and the single most reassuring
-/// thing it can say is that Put Back still works.
+/// Shows the complete reviewed selection and explains manifest-based recovery.
 struct SWPConfirmSheet: View {
 
     @EnvironmentObject private var engine: SWPScanEngine
 
-    private var groups: [SWPGroup] { engine.selectedGroups }
-    private var adminCount: Int { engine.selectedItems.filter(\.requiresAdmin).count }
+    private var groups: [SWPGroup] { engine.reviewedGroups }
+    private var itemCount: Int { groups.reduce(0) { $0 + $1.items.count } }
+    private var bytes: Int64 { groups.reduce(0) { $0 + $1.sizeBytes } }
+    private var adminCount: Int { groups.reduce(0) { $0 + $1.items.filter(\.requiresAdmin).count } }
     private var inUseCount: Int { groups.filter { $0.confidence == .inUse }.count }
 
     var body: some View {
@@ -27,7 +26,7 @@ struct SWPConfirmSheet: View {
             buttons
         }
         .padding(SWPTheme.Spacing.pane)
-        .frame(width: 430)
+        .frame(width: 490)
         .background(SWPTheme.Colors.background)
     }
 
@@ -40,9 +39,10 @@ struct SWPConfirmSheet: View {
                 Text("Move to Trash?")
                     .font(SWPTheme.Fonts.title)
                     .foregroundStyle(SWPTheme.Colors.textPrimary)
-                Text("Recoverable with Put Back in Finder.")
+                Text("Files stay in Trash until emptied. Use Restore Last Batch in Sweep for supported files, or recover them manually; Finder’s Put Back is not available.")
                     .font(SWPTheme.Fonts.caption)
                     .foregroundStyle(SWPTheme.Colors.textDim)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
@@ -52,11 +52,11 @@ struct SWPConfirmSheet: View {
     private var summary: some View {
         VStack(spacing: 0) {
             HStack {
-                Text("\(engine.selectedItems.count) items from \(groups.count) app\(groups.count == 1 ? "" : "s")")
+                Text("\(itemCount) item\(itemCount == 1 ? "" : "s") in \(groups.count) group\(groups.count == 1 ? "" : "s")")
                     .font(SWPTheme.Fonts.body)
                     .foregroundStyle(SWPTheme.Colors.textSecondary)
                 Spacer()
-                Text(SWPBytes.string(engine.selectedBytes))
+                Text(SWPBytes.string(bytes))
                     .font(.system(size: 15, weight: .semibold, design: .rounded).monospacedDigit())
                     .foregroundStyle(SWPTheme.Colors.accent)
             }
@@ -65,11 +65,11 @@ struct SWPConfirmSheet: View {
 
             SWPHairline()
 
-            // Capped at eight rows: a scrolling wall of names inside a
-            // confirmation dialog stops being read.
+            // Cap the viewport, never the review: hidden selections must be
+            // inspectable before the user authorizes their removal.
             ScrollView {
-                VStack(spacing: 0) {
-                    ForEach(groups.prefix(8)) { group in
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(groups) { group in
                         HStack(spacing: 8) {
                             Circle()
                                 .fill(SWPTheme.Colors.tint(for: group.confidence))
@@ -85,22 +85,21 @@ struct SWPConfirmSheet: View {
                         }
                         .padding(.horizontal, 12)
                         .padding(.vertical, 5)
-                    }
-
-                    if groups.count > 8 {
-                        HStack {
-                            Text("and \(groups.count - 8) more")
+                        ForEach(group.items) { item in
+                            Text(item.url.path)
                                 .font(SWPTheme.Fonts.caption)
                                 .foregroundStyle(SWPTheme.Colors.textDim)
-                            Spacer()
+                                .textSelection(.enabled)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .padding(.horizontal, 12)
+                                .padding(.bottom, 5)
                         }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 5)
                     }
+
                 }
                 .padding(.vertical, 4)
             }
-            .frame(maxHeight: 150)
+            .frame(maxHeight: 220)
         }
         .swpCard()
     }
@@ -153,6 +152,7 @@ struct SWPConfirmSheet: View {
             Button("Move to Trash") { engine.performRemoval() }
                 .buttonStyle(SWPPrimaryButtonStyle())
                 .keyboardShortcut(.defaultAction)
+                .disabled(groups.isEmpty)
         }
     }
 }

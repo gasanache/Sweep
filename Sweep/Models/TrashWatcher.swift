@@ -35,11 +35,12 @@ final class SWPTrashWatcher: ObservableObject {
     /// `self` — `removeObserver(self, …)` silently does nothing for them, so
     /// every start() used to add another live observer.
     private var suppressionObserver: NSObjectProtocol?
-    private var descriptor: CInt = -1
     private var known: Set<String> = []
 
-    private var trashURL: URL {
-        URL(fileURLWithPath: NSHomeDirectory() + "/.Trash", isDirectory: true)
+    private let trashURL: URL
+
+    init(trashURL: URL = URL(fileURLWithPath: NSHomeDirectory() + "/.Trash", isDirectory: true)) {
+        self.trashURL = trashURL
     }
 
     /// Posted by the uninstaller when *Sweep* puts a bundle in the Trash.
@@ -58,7 +59,7 @@ final class SWPTrashWatcher: ObservableObject {
 
     func start() {
         guard source == nil else { return }
-        descriptor = open(trashURL.path, O_EVTONLY)
+        let descriptor = open(trashURL.path, O_EVTONLY | O_CLOEXEC)
         guard descriptor >= 0 else {
             log.error("could not open the Trash for watching")
             return
@@ -71,11 +72,9 @@ final class SWPTrashWatcher: ObservableObject {
         let source = DispatchSource.makeFileSystemObjectSource(
             fileDescriptor: descriptor, eventMask: [.write], queue: .main)
         source.setEventHandler { [weak self] in self?.directoryChanged() }
-        source.setCancelHandler { [weak self] in
-            guard let self, self.descriptor >= 0 else { return }
-            close(self.descriptor)
-            self.descriptor = -1
-        }
+        // Each source owns its own descriptor, even across an immediate
+        // stop/start before the old cancellation handler gets a main-queue turn.
+        source.setCancelHandler { close(descriptor) }
         source.resume()
         self.source = source
 

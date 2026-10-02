@@ -20,14 +20,15 @@ struct SWPSweepRing: View {
     var progress: Double?
     var isActive: Bool
     var diameter: CGFloat = 190
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
-        // Full frame rate only while a scan is running; the idle drift renders
-        // at 20 fps, which the slow rotation hides completely. A decorative
-        // dial has no business keeping a utility app on a 60 Hz wake cycle.
-        TimelineView(.animation(minimumInterval: isActive ? 1.0 / 60.0 : 1.0 / 20.0,
-                                paused: false)) { context in
-            let time = context.date.timeIntervalSinceReferenceDate
+        // A utility should be still at rest and respect Reduce Motion.
+        let animates = isActive && !reduceMotion && scenePhase == .active
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0,
+                                paused: !animates)) { context in
+            let time = animates ? context.date.timeIntervalSinceReferenceDate : 0
             let speed: Double = isActive ? 1.0 : 0.16
 
             ZStack {
@@ -97,6 +98,7 @@ struct SWPSweepRing: View {
             .drawingGroup()
             .padding(-Self.glowInset)
         }
+        .accessibilityHidden(true)
     }
 
     /// Half the stroke width plus enough for the 8 pt shadow to fall off.

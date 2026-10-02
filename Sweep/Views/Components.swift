@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 // MARK: - Badge
 
@@ -14,7 +15,7 @@ struct SWPBadge: View {
             .foregroundStyle(tint)
             .padding(.horizontal, 6)
             .padding(.vertical, 2.5)
-            .accessibilityLabel("\(text) tier")
+            .accessibilityLabel(text)
             .background(tint.opacity(0.14))
             .overlay(
                 RoundedRectangle(cornerRadius: SWPTheme.Spacing.radiusBadge, style: .continuous)
@@ -65,9 +66,12 @@ struct SWPCheckbox: View {
 struct SWPPrimaryButtonStyle: ButtonStyle {
     var tint: Color = SWPTheme.Colors.accent
     var isEnabled: Bool = true
+    @Environment(\.isEnabled) private var environmentEnabled
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
+        let isEnabled = isEnabled && environmentEnabled
+        return configuration.label
             .font(.system(size: 13, weight: .semibold))
             // Disabled uses a dimmed *text* colour rather than the window
             // ground: the ground is near-white in light mode, and drawing it on
@@ -85,14 +89,15 @@ struct SWPPrimaryButtonStyle: ButtonStyle {
                     )
             )
             .opacity(configuration.isPressed ? 0.82 : 1)
-            .scaleEffect(configuration.isPressed ? 0.985 : 1)
-            .animation(.easeOut(duration: 0.1), value: configuration.isPressed)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.1), value: configuration.isPressed)
     }
 }
 
 /// Quiet button for secondary actions, so the gold stays scarce enough to mean
 /// "this is the action".
 struct SWPSecondaryButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
+
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.system(size: 12, weight: .medium))
@@ -107,7 +112,135 @@ struct SWPSecondaryButtonStyle: ButtonStyle {
                             .stroke(SWPTheme.Colors.border, lineWidth: 1)
                     )
             )
-            .opacity(configuration.isPressed ? 0.7 : 1)
+            .opacity(!isEnabled ? 0.45 : configuration.isPressed ? 0.7 : 1)
+    }
+}
+
+/// Keep NSTableView's selection and keyboard semantics, but let listRowBackground
+/// draw our neutral selection instead of a second, system-blue accent.
+struct SWPNeutralListSelection: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView { NSView() }
+    func updateNSView(_ view: NSView, context: Context) {
+        DispatchQueue.main.async {
+            var ancestor = view.superview
+            while let candidate = ancestor {
+                if let table = candidate as? NSTableView {
+                    table.selectionHighlightStyle = .none
+                    return
+                }
+                ancestor = candidate.superview
+            }
+        }
+    }
+}
+
+// MARK: - Shared browsing controls
+
+struct SWPSearchField: View {
+    let placeholder: String
+    @Binding var text: String
+    var identifier = "search"
+    @FocusState private var isFocused: Bool
+
+    var body: some View {
+        HStack(spacing: 7) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(SWPTheme.Colors.textSecondary)
+                .accessibilityHidden(true)
+            TextField(placeholder, text: $text)
+                .textFieldStyle(.plain)
+                .focused($isFocused)
+                .accessibilityLabel(placeholder)
+                .accessibilityIdentifier(identifier)
+            if !text.isEmpty {
+                Button { text = "" } label: {
+                    Image(systemName: "xmark.circle.fill").frame(width: 20, height: 20)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(SWPTheme.Colors.textSecondary)
+                .accessibilityLabel("Clear search")
+                .accessibilityIdentifier(identifier + ".clear")
+            }
+        }
+        .font(SWPTheme.Fonts.body)
+        .foregroundStyle(SWPTheme.Colors.textPrimary)
+        .padding(.horizontal, 9)
+        .frame(height: 30)
+        .background(SWPTheme.Colors.surface, in: RoundedRectangle(cornerRadius: 6))
+        .overlay(RoundedRectangle(cornerRadius: 6)
+            .stroke(isFocused ? SWPTheme.Colors.accent : SWPTheme.Colors.border, lineWidth: 1))
+        .background {
+            Button("") { isFocused = true }
+                .keyboardShortcut("f", modifiers: .command)
+                .hidden().accessibilityHidden(true)
+        }
+    }
+}
+
+struct SWPPageHeader<Actions: View>: View {
+    let title: String
+    let subtitle: String
+    @ViewBuilder var actions: () -> Actions
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 16) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title).font(SWPTheme.Fonts.title)
+                    .foregroundStyle(SWPTheme.Colors.textPrimary)
+                Text(subtitle).font(SWPTheme.Fonts.caption)
+                    .foregroundStyle(SWPTheme.Colors.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .layoutPriority(1)
+            Spacer(minLength: 0)
+            HStack(spacing: 8, content: actions).fixedSize()
+        }
+    }
+}
+
+struct SWPEmptyState: View {
+    let title: String
+    let message: String
+    var symbol = "magnifyingglass"
+    var isLoading = false
+
+    var body: some View {
+        VStack(spacing: 10) {
+            if isLoading {
+                ProgressView().controlSize(.small)
+            } else {
+                Image(systemName: symbol).font(.system(size: 28, weight: .light))
+                    .accessibilityHidden(true)
+            }
+            Text(title).font(SWPTheme.Fonts.rowTitle)
+                .foregroundStyle(SWPTheme.Colors.textPrimary)
+            Text(message).font(SWPTheme.Fonts.body)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .foregroundStyle(SWPTheme.Colors.textSecondary)
+        .frame(maxWidth: 360)
+        .padding(24)
+        .frame(maxWidth: .infinity)
+    }
+}
+
+struct SWPRefreshButton: View {
+    var isBusy: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Group {
+                if isBusy { ProgressView().controlSize(.small) }
+                else { Image(systemName: "arrow.clockwise") }
+            }
+            .frame(width: 16, height: 16)
+        }
+        .buttonStyle(SWPSecondaryButtonStyle())
+        .disabled(isBusy)
+        .accessibilityLabel("Refresh")
+        .help("Refresh (⌘R)")
     }
 }
 

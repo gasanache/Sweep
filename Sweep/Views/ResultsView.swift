@@ -10,7 +10,7 @@ struct SWPResultsView: View {
     @EnvironmentObject private var engine: SWPScanEngine
     @State private var isConfirmingSimulators = false
     @State private var isShowingIgnored = false
-    @FocusState private var isSearchFocused: Bool
+    let onOpenLocalAI: () -> Void
 
     /// Category groups after the user's filter and sort (3.1, 3.2).
     private var groups: [SWPGroup] {
@@ -21,7 +21,7 @@ struct SWPResultsView: View {
         VStack(alignment: .leading, spacing: 0) {
             header
 
-            if engine.hasResults {
+            if engine.hasResults || engine.filter.isActive {
                 filterBar
                     .padding(.horizontal, SWPTheme.Spacing.pane)
                     .padding(.bottom, SWPTheme.Spacing.row)
@@ -43,10 +43,23 @@ struct SWPResultsView: View {
             // things most likely to explain *why* it was empty.
             ScrollView {
                 LazyVStack(spacing: 5) {
+                    if engine.selectedCategory == .leftovers {
+                        Button(action: onOpenLocalAI) {
+                            Label(engine.result.aiInventory.map { "AI & Models: " + $0.summary + ($0.isPartial ? " · partial coverage" : "") }
+                                  ?? "Discover AI tools, shared caches and model files in AI & Models",
+                                  systemImage: "cpu")
+                                .font(SWPTheme.Fonts.caption)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .buttonStyle(SWPSecondaryButtonStyle())
+                        .padding(.bottom, SWPTheme.Spacing.row)
+                    }
                     if groups.isEmpty {
                         if engine.selectedCategory == .leftovers,
                            engine.result.inventoryUnreliable {
                             inventoryNote
+                        } else if engine.selectedCategory == .developer, !SWPSettings.scansDeveloper {
+                            developerDisabledNote
                         } else {
                             emptyState
                         }
@@ -98,54 +111,57 @@ struct SWPResultsView: View {
             }
         } message: {
             Text(engine.pendingDisable.map { entry in
-                "\(entry.label) will be unloaded and its configuration moved to the Trash, so it no longer starts at login.\n\nIts app is still installed and this is reversible — the file stays in the Trash and Sweep can put it back."
+                "\(entry.label) will be unloaded and its configuration moved to the Trash, so it no longer starts at login.\n\nIts app is still installed. User and system-installed agents are unloaded in your current login session; other logged-in accounts may keep their agents running until logout. Restore Last Batch can restore supported configuration files but does not restart jobs."
             } ?? "")
         }
         .alert("Delete unavailable simulators?", isPresented: $isConfirmingSimulators) {
             Button("Cancel", role: .cancel) { }
             Button("Delete", role: .destructive) { engine.deleteUnavailableSimulators() }
         } message: {
-            // Stated bluntly: this is the only action in Sweep that does not
-            // go to the Trash, because `simctl` owns the simulator database
-            // and deleting the folders by hand corrupts it.
-            Text("Runs Xcode's own simctl to remove simulator devices whose runtime is no longer installed.\n\nUnlike everything else in Sweep, this does not go to the Trash and cannot be undone.")
+            // Delegate to simctl, which owns the simulator database.
+            Text("Runs Xcode's own simctl to remove simulator devices whose runtime is no longer installed.\n\nThis does not go to the Trash and cannot be undone.")
         }
     }
 
     // MARK: Header
 
     private var header: some View {
-        HStack(alignment: .firstTextBaseline) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(engine.selectedCategory.title)
-                    .font(SWPTheme.Fonts.title)
-                    .foregroundStyle(SWPTheme.Colors.textPrimary)
-                Text(engine.selectedCategory.blurb)
-                    .font(SWPTheme.Fonts.caption)
-                    .foregroundStyle(SWPTheme.Colors.textDim)
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(engine.selectedCategory.title)
+                        .font(SWPTheme.Fonts.title)
+                        .foregroundStyle(SWPTheme.Colors.textPrimary)
+                    Text(engine.selectedCategory.blurb)
+                        .font(SWPTheme.Fonts.caption)
+                        .foregroundStyle(SWPTheme.Colors.textDim)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Spacer(minLength: 0)
+
+                if !groups.isEmpty {
+                    let allSelected = groups.allSatisfy { engine.isSelected($0) }
+                    Button(allSelected ? "Deselect Visible" : "Select Visible") {
+                        if allSelected {
+                            engine.deselectAll(in: engine.selectedCategory)
+                        } else {
+                            engine.selectAll(in: engine.selectedCategory)
+                        }
+                    }
+                    .buttonStyle(SWPSecondaryButtonStyle())
+                    .fixedSize()
+                    .help("Changes only the groups shown in this category. Out-of-view selections stay unchanged.")
+                }
             }
 
-            Spacer()
-
             if engine.selectedCategory == .developer {
-                Button(engine.isDeletingSimulators ? "Working…" : "Delete Unavailable Simulators…") {
+                Button(engine.isDeletingSimulators ? "Working" : "Delete Unavailable Simulators") {
                     isConfirmingSimulators = true
                 }
                 .buttonStyle(SWPSecondaryButtonStyle())
                 .disabled(engine.isDeletingSimulators)
                 .help("Removes simulator devices whose runtime is gone, using Xcode's own tool")
-            }
-
-            if !groups.isEmpty {
-                let allSelected = groups.allSatisfy { engine.isSelected($0) }
-                Button(allSelected ? "Deselect All" : "Select All") {
-                    if allSelected {
-                        engine.deselectAll(in: engine.selectedCategory)
-                    } else {
-                        engine.selectAll(in: engine.selectedCategory)
-                    }
-                }
-                .buttonStyle(SWPSecondaryButtonStyle())
             }
         }
         .padding(.horizontal, SWPTheme.Spacing.pane)
@@ -156,44 +172,51 @@ struct SWPResultsView: View {
     // MARK: Filter bar
 
     private var filterBar: some View {
-        HStack(spacing: 8) {
-            HStack(spacing: 7) {
-                Image(systemName: "magnifyingglass")
-                    .font(.system(size: 11))
-                    .foregroundStyle(SWPTheme.Colors.textDim)
-                TextField("Filter by name or path", text: $engine.query)
-                    .textFieldStyle(.plain)
-                    .font(SWPTheme.Fonts.body)
-                    .foregroundStyle(SWPTheme.Colors.textPrimary)
-                    .focused($isSearchFocused)
-                if !engine.query.isEmpty {
-                    Button { engine.query = "" } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 11))
-                            .foregroundStyle(SWPTheme.Colors.textDim)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                SWPSearchField(placeholder: "Filter by name or path", text: $engine.filter.query,
+                               identifier: "results.search")
+                Picker("Sort by", selection: $engine.sortOrder) {
+                    ForEach(SWPSortOrder.allCases) { order in
+                        Text(order.title).tag(order)
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Clear filter")
                 }
-                Button("") { isSearchFocused = true }
-                    .keyboardShortcut("f", modifiers: .command)
-                    .opacity(0).frame(width: 0, height: 0)
-                    .accessibilityHidden(true)
+                .pickerStyle(.menu)
+                .frame(width: 155)
+                .tint(SWPTheme.Colors.accent)
+                .accessibilityLabel("Sort order")
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .swpCard()
 
-            Picker("", selection: $engine.sortOrder) {
-                ForEach(SWPSortOrder.allCases) { order in
-                    Text(order.title).tag(order)
+            HStack(spacing: 8) {
+                Picker("Minimum size", selection: $engine.filter.minimumSize) {
+                    ForEach(SWPMinimumSize.allCases) { size in
+                        Text(size.title).tag(size)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 130)
+                .help("Minimum total group size, using the last scan's measurements")
+                .accessibilityLabel("Minimum group size")
+
+                Picker("Evidence", selection: $engine.filter.evidence) {
+                    Text("All evidence").tag(Optional<SWPConfidence>.none)
+                    ForEach([SWPConfidence.safe, .confirmed, .likely, .inUse], id: \.self) { evidence in
+                        Text(evidence.label).tag(Optional(evidence))
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 140)
+                .accessibilityLabel("Evidence filter")
+
+                Spacer(minLength: 0)
+                if engine.filter.isActive {
+                    Button("Clear Filters") { engine.clearFilters() }
+                        .buttonStyle(SWPSecondaryButtonStyle())
+                        .fixedSize()
+                        .help("Reset name/path, size and evidence filters without changing selections")
                 }
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .frame(width: 220)
-            .tint(SWPTheme.Colors.accent)
-            .accessibilityLabel("Sort order")
+            .controlSize(.small)
         }
     }
 
@@ -202,20 +225,21 @@ struct SWPResultsView: View {
     /// Distinguishes "this category is clean" from "your filter matched
     /// nothing" — calling the second one clean is a lie the user can act on.
     private var emptyState: some View {
-        let filtering = !engine.query.trimmingCharacters(in: .whitespaces).isEmpty
+        let findingCount = engine.result.groups(in: engine.selectedCategory).count
+        let noMatches = engine.filter.isActive && findingCount > 0
         return VStack(spacing: 10) {
-            SWPIconTile(symbol: filtering ? "magnifyingglass" : "checkmark",
-                        tint: filtering ? SWPTheme.Colors.textDim : SWPTheme.Colors.safe,
+            SWPIconTile(symbol: noMatches ? "magnifyingglass" : "checkmark",
+                        tint: noMatches ? SWPTheme.Colors.textDim : SWPTheme.Colors.safe,
                         size: 40)
-            Text(filtering ? "No matches for “\(engine.query)”" : "Nothing to clean here")
+            Text(noMatches ? "No matches for these filters" : "Nothing to clean here")
                 .font(SWPTheme.Fonts.rowTitle)
                 .foregroundStyle(SWPTheme.Colors.textSecondary)
-            Text(filtering ? "This category has \(engine.result.groups(in: engine.selectedCategory).count) findings that the filter is hiding."
+            Text(noMatches ? "This category has \(findingCount) finding\(findingCount == 1 ? "" : "s") hidden by your filters."
                            : engine.selectedCategory.blurb)
                 .font(SWPTheme.Fonts.caption)
                 .foregroundStyle(SWPTheme.Colors.textDim)
-            if filtering {
-                Button("Clear Filter") { engine.query = "" }
+            if engine.filter.isActive {
+                Button("Clear Filters") { engine.clearFilters() }
                     .buttonStyle(SWPSecondaryButtonStyle())
             }
         }
@@ -240,7 +264,7 @@ struct SWPResultsView: View {
                         .font(SWPTheme.Fonts.badge)
                         .tracking(0.7)
                         .foregroundStyle(SWPTheme.Colors.textDim)
-                    Text("· owned by installed apps, left alone")
+                    Text("· not included in cleanup")
                         .font(SWPTheme.Fonts.caption)
                         .foregroundStyle(SWPTheme.Colors.textDim)
                     Spacer(minLength: 8)
@@ -309,19 +333,30 @@ struct SWPResultsView: View {
             Image(systemName: isClean ? "checkmark.circle" : "exclamationmark.circle")
                 .font(.system(size: 12))
                 .foregroundStyle(isClean ? SWPTheme.Colors.safe : SWPTheme.Colors.review)
-            Text(text)
-                .font(SWPTheme.Fonts.caption)
-                .foregroundStyle(SWPTheme.Colors.textSecondary)
-                .fixedSize(horizontal: false, vertical: true)
-            Spacer(minLength: 8)
-            if let folder = engine.restorableFolders.first {
-                Button(engine.isRestoring ? "Restoring…" : "Undo System Removals") {
-                    engine.restore(from: folder)
+            VStack(alignment: .leading, spacing: 8) {
+                Text(text).font(SWPTheme.Fonts.body)
+                if outcome.trashedCount > 0 {
+                    Text("Files still occupy space in Trash until it is emptied.")
+                        .font(SWPTheme.Fonts.caption)
                 }
-                .buttonStyle(SWPSecondaryButtonStyle())
-                .disabled(engine.isRestoring)
-                .help("Move the system files from the most recent authorised removal back where they came from")
+                if failedCount > 0 {
+                    DisclosureGroup("\(failedCount) items need attention") {
+                        ScrollView {
+                            Text((outcome.failures.map { "\($0.path): \($0.reason)" }
+                                  + outcome.refusedByPolicy.map { "Safety policy refused: \($0)" }).joined(separator: "\n\n"))
+                                .font(SWPTheme.Fonts.caption).textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .frame(maxHeight: 160).padding(.top, 6)
+                    }
+                    .font(SWPTheme.Fonts.caption)
+                    Text("Review these reasons before trying again. Files already moved remain in the Trash batch.")
+                        .font(SWPTheme.Fonts.caption)
+                }
             }
+            .foregroundStyle(SWPTheme.Colors.textSecondary)
+            .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 8)
             Button { engine.clearOutcome() } label: {
                 Image(systemName: "xmark")
                     .font(.system(size: 9, weight: .semibold))
@@ -340,18 +375,26 @@ struct SWPResultsView: View {
         HStack(alignment: .top, spacing: 9) {
             Image(systemName: "arrow.uturn.backward.circle")
                 .font(.system(size: 12))
-                .foregroundStyle(SWPTheme.Colors.safe)
-            Text(message)
-                .font(SWPTheme.Fonts.caption)
-                .foregroundStyle(SWPTheme.Colors.textSecondary)
-            Spacer(minLength: 8)
-            if let folder = engine.restorableFolders.first {
-                Button(engine.isRestoring ? "Restoring…" : "Undo") {
-                    engine.restore(from: folder)
+                .foregroundStyle(engine.restoreFailures.isEmpty ? SWPTheme.Colors.safe : SWPTheme.Colors.review)
+            VStack(alignment: .leading, spacing: 6) {
+                Text(message)
+                    .font(SWPTheme.Fonts.caption)
+                    .foregroundStyle(SWPTheme.Colors.textSecondary)
+                if !engine.restoreFailures.isEmpty {
+                    DisclosureGroup("Details") {
+                        ScrollView {
+                            Text(engine.restoreFailures.joined(separator: "\n"))
+                                .font(SWPTheme.Fonts.caption)
+                                .foregroundStyle(SWPTheme.Colors.textSecondary)
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .frame(maxHeight: 100)
+                    }
+                    .font(SWPTheme.Fonts.caption)
                 }
-                .buttonStyle(SWPSecondaryButtonStyle())
-                .disabled(engine.isRestoring)
             }
+            Spacer(minLength: 8)
             Button { engine.restoreMessage = nil } label: {
                 Image(systemName: "xmark")
                     .font(.system(size: 9, weight: .semibold))
@@ -440,7 +483,7 @@ struct SWPResultsView: View {
                     .font(SWPTheme.Fonts.caption)
                     .foregroundStyle(SWPTheme.Colors.textDim)
                     .fixedSize(horizontal: false, vertical: true)
-                Button("Open Settings…") {
+                Button("Open Settings") {
                     NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
                 }
                 .buttonStyle(SWPSecondaryButtonStyle())

@@ -14,13 +14,13 @@ enum SWPPhase: Equatable {
 
 // MARK: - Scan stages
 
-/// The five stages a scan moves through, in order.
+/// The stages a scan moves through, in order.
 ///
 /// Named rather than a bare percentage because "Scanning Caches" tells the
 /// user something a spinner cannot: which part of their disk is being read,
 /// and therefore why it is taking as long as it is.
 enum SWPScanStage: Int, CaseIterable, Identifiable {
-    case inventory, leftovers, developer, disposable, startup
+    case inventory, leftovers, developer, disposable, startup, ai
 
     var id: Int { rawValue }
 
@@ -31,6 +31,7 @@ enum SWPScanStage: Int, CaseIterable, Identifiable {
         case .developer:  return "Developer"
         case .disposable: return "Caches & Logs"
         case .startup:    return "Startup"
+        case .ai:         return "AI & Models"
         }
     }
 }
@@ -51,13 +52,9 @@ enum SWPSortOrder: String, CaseIterable, Identifiable {
 
 // MARK: - Scan engine
 
-/// The app's single source of truth: owns the scan, the selection and the
-/// removal, and publishes everything the views render.
-///
-/// One store rather than a view model per screen. The three screens are three
-/// states of one workflow, not independent surfaces, and splitting them meant
-/// selection state had to be threaded between objects that could disagree
-/// about which scan it belonged to.
+/// Owns the main scan and the cleaner's selection/removal workflow. Independent
+/// tools retain their own operational stores. Read-only AI evidence travels with
+/// the scan result, but never becomes part of the cleaner's removal selection.
 @MainActor
 final class SWPScanEngine: ObservableObject {
 
@@ -78,24 +75,33 @@ final class SWPScanEngine: ObservableObject {
     /// Lets the results view stay put instead of blanking — a rescan that
     /// empties the window makes the app feel like it lost your work.
     @Published private(set) var isRescanning = false
+    @Published private(set) var isRemoving = false
 
     var stageProgress: Double {
         Double(completedStages.count) / Double(SWPScanStage.allCases.count)
     }
 
-    @Published var selectedCategory: SWPCategory = .leftovers
-    /// Whether the main pane shows the uninstaller instead of scan content.
-    /// UI-navigation state, held here because the engine is the window's root
-    /// store; the uninstaller's own data lives in `SWPUninstallStore`.
-    @Published var isUninstallerActive = false
-    /// Free-text filter over the results list (3.1). Matches group names and
-    /// the paths inside them, so searching "chrome" finds a group whose title
-    /// is a vendor but whose paths say Chrome.
-    @Published var query = ""
+    /// One active destination; independent tools keep their own operational stores.
+    @Published var destination: SWPDestination = .cleanup(.leftovers)
+    var selectedCategory: SWPCategory {
+        if case .cleanup(let category) = destination { return category }
+        return .leftovers
+    }
+    /// Name/path, minimum-size and evidence filters compose without rescanning.
+    @Published var filter = SWPResultFilter()
+    /// Session-only user-added model locations, shared with the AI browser.
+    var additionalAIFolders: [URL] = []
     @Published var sortOrder: SWPSortOrder = .evidence
     @Published var selectedGroupIDs: Set<String> = []
     @Published var expandedGroupIDs: Set<String> = []
-    @Published var isConfirming = false
+    @Published var isConfirming = false {
+        didSet {
+            if !isConfirming { reviewedGroups = [] }
+        }
+    }
+    /// Frozen when the confirmation opens, so streamed results cannot change
+    /// what the user is authorizing while they review the paths.
+    @Published private(set) var reviewedGroups: [SWPGroup] = []
 
     /// Mirrored into engine state so the views actually refresh.
     ///
@@ -115,12 +121,31 @@ final class SWPScanEngine: ObservableObject {
     private var scanGeneration = 0
     /// Accumulates streamed stages. Main-actor state rather than a local of
     /// the scan task: the stage callbacks run on the main actor, so a local
-    /// would be mutated from five separate contexts while the scan task read
+    /// would be mutated from separate stage contexts while the scan task read
     /// it — a real race that let `healthyStartup` come back empty on a fast
     /// scan, not merely a compiler complaint.
     private var streamedResult = SWPScanResult()
 
-    init() { ignoredPathList = ignoreList.paths.sorted() }
+    typealias ProgressHandler = @Sendable (String) -> Void
+    typealias StageHandler = @Sendable (SWPScanStage, [SWPGroup], SWPScanResult) async -> Void
+    typealias ScanWork = @Sendable (Set<String>, Set<String>, [URL], @escaping ProgressHandler, @escaping StageHandler) async -> Void
+    private let scanWork: ScanWork
+    private let removeItems: @Sendable ([SWPItem]) -> SWPRemovalOutcome
+
+    init(scanWork: ScanWork? = nil,
+         removeItems: (@Sendable ([SWPItem]) -> SWPRemovalOutcome)? = nil) {
+        self.scanWork = scanWork ?? { ignored, running, folders, progress, stage in
+            await Self.performScan(ignored: ignored, runningBundleIDs: running, additionalAIFolders: folders,
+                                   progress: progress, stage: stage)
+        }
+        self.removeItems = removeItems ?? { items in
+            let removal = SWPRemovalService()
+            var outcome = removal.trash(items)
+            outcome.merge(removal.trashWithAuthorisation(items))
+            return outcome
+        }
+        ignoredPathList = ignoreList.paths.sorted()
+    }
 
     // MARK: Derived
 
@@ -128,32 +153,66 @@ final class SWPScanEngine: ObservableObject {
         result.groups.filter { selectedGroupIDs.contains($0.id) }
     }
 
-    var selectedItems: [SWPItem] {
-        selectedGroups.flatMap(\.items)
-    }
-
-    var selectedBytes: Int64 {
-        selectedGroups.reduce(0) { $0 + $1.sizeBytes }
-    }
-
-    var selectionNeedsAdmin: Bool {
-        selectedGroups.contains { $0.requiresAdmin }
-    }
-
     var hasResults: Bool { !result.groups.isEmpty }
 
-    /// Selected groups the current filter is hiding.
-    ///
-    /// Selection deliberately survives filtering — typing in the search box
-    /// should not silently untick your work — but that means the action bar can
-    /// read "12 items selected" over a list showing two rows. The count stays
-    /// accurate and the UI says how many are out of sight, rather than quietly
-    /// letting someone trash rows they cannot see.
-    var hiddenSelectedCount: Int {
-        let trimmed = query.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty else { return 0 }
-        let visible = Set(SWPCategory.allCases.flatMap { visibleGroups(in: $0).map(\.id) })
-        return selectedGroupIDs.subtracting(visible).count
+    var isMutating: Bool {
+        isRemoving || isDeletingSimulators || isRestoring || isDisablingStartup
+    }
+
+    /// Everything the action bar shows, derived in one pass. The bar is built
+    /// twice per render (`ViewThatFits`), and reading the individual computed
+    /// properties re-filtered and re-sorted the results about ten times per
+    /// keystroke in the filter field.
+    struct SelectionSummary {
+        var itemCount = 0
+        var bytes: Int64 = 0
+        var needsAdmin = false
+        var hiddenGroupCount = 0
+        var hasUnselectedSafeShown = false
+    }
+
+    var selectionSummary: SelectionSummary {
+        let shown = shownGroupsIgnoringOrder
+        var summary = SelectionSummary()
+        summary.hasUnselectedSafeShown = shown.contains {
+            $0.confidence == .safe && !selectedGroupIDs.contains($0.id)
+        }
+        guard !selectedGroupIDs.isEmpty else { return summary }
+        let shownIDs = Set(shown.lazy.map(\.id))
+        for group in result.groups where selectedGroupIDs.contains(group.id) {
+            summary.itemCount += group.items.count
+            for item in group.items {
+                summary.bytes += item.sizeBytes
+                if item.requiresAdmin { summary.needsAdmin = true }
+            }
+            if !shownIDs.contains(group.id) { summary.hiddenGroupCount += 1 }
+        }
+        return summary
+    }
+
+    /// Groups of the current category that pass the filters. Visibility only;
+    /// ordering is irrelevant, so this skips `visibleGroups`' sorts.
+    private var shownGroupsIgnoringOrder: [SWPGroup] {
+        filter.matchingGroups(in: result.groups.filter { $0.category == selectedCategory })
+    }
+
+    /// Selected live groups outside the current category and all active filters.
+    /// Hidden selections remain part of the confirmation until explicitly cleared.
+    private var hiddenSelectedGroupIDs: Set<String> {
+        guard !selectedGroupIDs.isEmpty else { return [] }
+        let shown = Set(shownGroupsIgnoringOrder.lazy.map(\.id))
+        return Set(result.groups.lazy.filter {
+            self.selectedGroupIDs.contains($0.id) && !shown.contains($0.id)
+        }.map(\.id))
+    }
+
+    func clearFilters() {
+        filter = SWPResultFilter()
+    }
+
+    /// Keeps the visible selection; never changes the findings or the filters.
+    func deselectHidden() {
+        selectedGroupIDs.subtract(hiddenSelectedGroupIDs)
     }
 
     /// Groups for a category after filtering and sorting.
@@ -161,15 +220,7 @@ final class SWPScanEngine: ObservableObject {
     /// `.evidence` keeps the default order defined by `SWPScanResult` (hard
     /// evidence first, then size) — the ordering the tiers exist to express.
     func visibleGroups(in category: SWPCategory) -> [SWPGroup] {
-        var groups = result.groups(in: category)
-
-        let trimmed = query.trimmingCharacters(in: .whitespaces)
-        if !trimmed.isEmpty {
-            groups = groups.filter { group in
-                group.name.localizedCaseInsensitiveContains(trimmed)
-                    || group.items.contains { $0.url.path.localizedCaseInsensitiveContains(trimmed) }
-            }
-        }
+        let groups = filter.matchingGroups(in: result.groups(in: category))
 
         switch sortOrder {
         case .evidence: return groups
@@ -189,7 +240,7 @@ final class SWPScanEngine: ObservableObject {
     private var rescanPending = false
 
     func scan() {
-        guard phase != .removing else { return }
+        guard !isRemoving else { return }
         guard scanTask == nil else {
             rescanPending = true
             return
@@ -226,25 +277,28 @@ final class SWPScanEngine: ObservableObject {
         let running = Set(NSWorkspace.shared.runningApplications
             .compactMap { $0.bundleIdentifier?.lowercased() })
 
+        let scanWork = self.scanWork
+        let folders = additionalAIFolders
         scanTask = Task { [weak self] in
-            await Self.performScan(
-                ignored: ignored,
-                runningBundleIDs: running,
+            await scanWork(
+                ignored,
+                running,
+                folders,
                 // The weak capture is read on each closure's own frame rather
                 // than from inside a nested concurrent closure.
-                progress: { [weak self] message in
+                { [weak self] message in
                     Task { @MainActor in
-                        guard let self, self.scanGeneration == generation else { return }
-                        self.phase = .scanning(message)
+                        guard let self, self.scanGeneration == generation, self.scanTask != nil, !self.isRemoving else { return }
+                        if !self.isRescanning { self.phase = .scanning(message) }
                     }
                 },
                 // `async` so each stage is *awaited* by the scanner before the
-                // next one starts. Five main-actor hops per scan, and in
+                // next one starts. One main-actor hop per stage, and in
                 // exchange every stage is guaranteed applied before the
                 // completion block reads the accumulated result (3.5).
-                stage: { [weak self] stage, groups, partial in
+                { [weak self] stage, groups, partial in
                     await MainActor.run {
-                        guard let self, self.scanGeneration == generation else { return }
+                        guard let self, self.scanGeneration == generation, !self.isRemoving else { return }
                         self.streamedResult.groups += groups
                         self.streamedResult.merge(partial)
                         // During a rescan the old list stays until the new one
@@ -255,15 +309,14 @@ final class SWPScanEngine: ObservableObject {
                             self.result = self.streamedResult
                         }
                         self.completedStages.insert(stage)
-                        if self.phase == .removing { return }
                         if let next = SWPScanStage(rawValue: stage.rawValue + 1) {
                             self.currentStage = next
                         }
-                        self.isRescanning = false
                     }
                 })
 
-            guard let self, !Task.isCancelled, self.scanGeneration == generation else { return }
+            guard let self, !Task.isCancelled, self.scanGeneration == generation, !self.isRemoving else { return }
+            self.result = self.streamedResult
             self.healthyStartupItems = self.streamedResult.healthyStartup
             self.lastScanDate = Date()
             // A removal may have started while this scan was running. The
@@ -285,6 +338,8 @@ final class SWPScanEngine: ObservableObject {
     }
 
     func cancelScan() {
+        guard !isRemoving else { return }
+        rescanPending = false
         // Bumping the generation orphans every callback of the cancelled scan;
         // the handler in `performScan` cancels the detached work for real.
         scanGeneration += 1
@@ -294,7 +349,7 @@ final class SWPScanEngine: ObservableObject {
         phase = result.groups.isEmpty ? .idle : .results
     }
 
-    /// Runs the four scanners off the main actor.
+    /// Runs filesystem scanning off the main actor.
     ///
     /// `detached` rather than a plain `Task`: the engine is `@MainActor`, so an
     /// inherited context would drag several seconds of synchronous filesystem
@@ -308,10 +363,12 @@ final class SWPScanEngine: ObservableObject {
     nonisolated private static func performScan(
         ignored: Set<String>,
         runningBundleIDs: Set<String>,
+        additionalAIFolders: [URL],
         progress: @escaping @Sendable (String) -> Void,
         stage: @escaping @Sendable (SWPScanStage, [SWPGroup], SWPScanResult) async -> Void
     ) async {
         let work = Task.detached(priority: .userInitiated) {
+            SWPAIInspectionProtection.shared.reserve(additionalAIFolders)
             progress("Taking inventory of installed apps")
             let inventory = SWPAppInventory.build(runningBundleIDs: runningBundleIDs)
             var meta = SWPScanResult()
@@ -333,13 +390,12 @@ final class SWPScanEngine: ObservableObject {
 
             // Claim orphan paths so the disposable sweep cannot list the same
             // folder twice under a friendlier label.
-            var claimed = Set(orphanGroups.flatMap(\.items).map { $0.url.standardizedFileURL.path })
+            let claimed = Set(orphanGroups.flatMap(\.items).map { $0.url.standardizedFileURL.path })
 
             var junkScanner = SWPJunkScanner(inventory: inventory, claimed: claimed,
                                              ignored: ignored)
             let developerGroups = junkScanner.scanDeveloper(
                 emitGroups: SWPSettings.scansDeveloper) { progress("Scanning \($0)") }
-            claimed.formUnion(developerGroups.flatMap(\.items).map(\.url.path))
             await stage(.developer, developerGroups, SWPScanResult())
             if Task.isCancelled { return }
 
@@ -357,6 +413,12 @@ final class SWPScanEngine: ObservableObject {
             tail.trashBytes = SWPJunkScanner.trashSize()
             tail.healthyStartup = startup.healthy
             await stage(.startup, startup.groups, tail)
+            if Task.isCancelled { return }
+
+            progress("Discovering AI tools and model locations (read-only)")
+            var ai = SWPScanResult()
+            ai.aiInventory = SWPAIInventoryScanner(additionalFolders: additionalAIFolders).scan()
+            if !Task.isCancelled { await stage(.ai, [], ai) }
         }
 
         await withTaskCancellationHandler {
@@ -374,16 +436,11 @@ final class SWPScanEngine: ObservableObject {
     // composed. A scan now ends with zero ticks, and `selectAllSafe()` exists
     // for when the user wants the disposable tier in one explicit click.
 
-    /// Whether the Select Safe shortcut has anything left to add.
-    var hasUnselectedSafeGroups: Bool {
-        result.groups.contains { $0.confidence == .safe && !selectedGroupIDs.contains($0.id) }
-    }
-
-    /// Selects every `.safe` group — ownerless, rebuildable data. Never touches
-    /// `.inUse`, `.confirmed` or `.likely`; those are individual decisions.
+    /// Adds only visible `.safe` groups. Hidden groups and other evidence tiers
+    /// keep their explicit selections unchanged.
     func selectAllSafe() {
         selectedGroupIDs.formUnion(
-            result.groups.filter { $0.confidence == .safe }.map(\.id)
+            visibleGroups(in: selectedCategory).lazy.filter { $0.confidence == .safe }.map(\.id)
         )
     }
 
@@ -403,8 +460,7 @@ final class SWPScanEngine: ObservableObject {
         }
     }
 
-    /// Acts on the *visible* groups: with a filter active, "Select All" must
-    /// mean what the user can see, not the whole hidden category.
+    /// Acts only on visible groups; hidden selections remain unchanged.
     func selectAll(in category: SWPCategory) {
         selectedGroupIDs.formUnion(visibleGroups(in: category).map(\.id))
     }
@@ -418,33 +474,43 @@ final class SWPScanEngine: ObservableObject {
     // MARK: Removal
 
     func confirmRemoval() {
-        guard !selectedItems.isEmpty else { return }
+        guard !isMutating, !isConfirming else { return }
+        let selected = selectedGroups
+        var remaining = Set(SWPRemovalService.prunedOfDescendants(selected.flatMap(\.items)).map(\.id))
+        guard !remaining.isEmpty else { return }
+        reviewedGroups = selected.compactMap { group in
+            let items = group.items.filter { remaining.remove($0.id) != nil }
+            guard !items.isEmpty else { return nil }
+            return SWPGroup(id: group.id, name: group.name, category: group.category,
+                            confidence: group.confidence, items: items)
+        }
         isConfirming = true
     }
 
-    /// Trashes the current selection, user-level first, then the authorised batch.
+    /// Trashes only the reviewed snapshot, user-level first, then the authorised batch.
     ///
     /// The filesystem work and the admin password prompt run on a detached
     /// task: on the main actor they froze the window for the whole removal,
     /// and — with no suspension point between setting `.removing` and setting
     /// `.results` — the removing state could never even render.
     func performRemoval() {
+        guard !isMutating, isConfirming, !reviewedGroups.isEmpty else { return }
+        let groups = reviewedGroups
         isConfirming = false
-        guard phase != .removing else { return }
-        // Descendants of another selected item vanish with their parent;
-        // trashing them afterwards would only manufacture failures.
-        let items = SWPRemovalService.prunedOfDescendants(selectedItems)
+        // The review already removed duplicate and descendant paths. This is
+        // exactly the list displayed and totaled in the confirmation.
+        let items = groups.flatMap(\.items)
         guard !items.isEmpty else { return }
 
+        // The reviewed snapshot survives cancellation. Every pending scanner
+        // callback loses its generation before the independent mutation lock is set.
+        cancelScan()
+        isRemoving = true
         phase = .removing
-        let removal = self.removal
+        let removeItems = self.removeItems
         Task { [weak self] in
-            let outcome = await Task.detached(priority: .userInitiated) { () -> SWPRemovalOutcome in
-                var outcome = removal.trash(items)
-                if items.contains(where: { $0.requiresAdmin }) {
-                    outcome.merge(removal.trashWithAuthorisation(items))
-                }
-                return outcome
+            let outcome = await Task.detached(priority: .userInitiated) {
+                removeItems(items)
             }.value
 
             guard let self else { return }
@@ -476,8 +542,10 @@ final class SWPScanEngine: ObservableObject {
         // The accumulator must be reconciled too: a stage landing after this
         // point would otherwise republish rows that are already in the Trash.
         streamedResult.groups = reconciled(streamedResult.groups)
-        selectedGroupIDs = selectedGroupIDs.filter { id in result.groups.contains { $0.id == id } }
+        let live = Set(result.groups.lazy.map(\.id))
+        selectedGroupIDs.formIntersection(live)
         phase = .results
+        isRemoving = false
 
         // Re-measuring the Trash walks every file in it — seconds when it
         // holds tens of thousands — so it happens off the main actor, stamped
@@ -499,8 +567,8 @@ final class SWPScanEngine: ObservableObject {
 
     /// Returns to the results list from the idle hero without rescanning.
     func showResults() {
-        guard hasResults else { return }
-        isUninstallerActive = false
+        guard hasResults, !isMutating else { return }
+        if !destination.isCleanup { destination = .cleanup(.leftovers) }
         phase = .results
     }
 
@@ -538,9 +606,12 @@ final class SWPScanEngine: ObservableObject {
     // MARK: Startup jobs
 
     @Published var pendingDisable: SWPStartupEntry?
+    @Published private(set) var isDisablingStartup = false
 
-    /// Turns off a working launch agent or daemon, reversibly.
+    /// Stops a working launch agent or daemon and moves its configuration to Trash.
     func disableStartupJob(_ entry: SWPStartupEntry) {
+        guard !isMutating, !isConfirming else { return }
+        isDisablingStartup = true
         pendingDisable = nil
         let removal = self.removal
         Task { [weak self] in
@@ -548,12 +619,15 @@ final class SWPScanEngine: ObservableObject {
                 removal.disableStartupJobs([entry])
             }.value
             guard let self else { return }
+            defer { self.isDisablingStartup = false }
             if outcome.adminCancelled { return }
             let message = outcome.trashedCount > 0
-                ? "Disabled \(entry.label). Its configuration is in the Trash, in a dated “Sweep Disabled Startup” folder — Undo below puts it back."
+                ? "Disabled \(entry.label). Its configuration is in the Trash. Undo attempts a safe restore; some system locations require manual administrator handling."
                 : "Couldn't disable \(entry.label)."
             self.refreshRestorable()
             self.scan()
+            self.restoreFailures = outcome.failures.map { "\($0.path): \($0.reason)" }
+                + outcome.refusedByPolicy.map { "Safety policy refused: \($0)" }
             self.restoreMessage = message
         }
     }
@@ -571,35 +645,50 @@ final class SWPScanEngine: ObservableObject {
     @Published private(set) var isDeletingSimulators = false
 
     func deleteUnavailableSimulators() {
-        guard !isDeletingSimulators else { return }
+        guard !isMutating, !isConfirming else { return }
         isDeletingSimulators = true
         Task { [weak self] in
-            let output = await Task.detached(priority: .userInitiated) {
-                SWPAppInventory.shell("/usr/bin/xcrun", ["simctl", "delete", "unavailable"],
-                                      timeout: 180)
+            let result = await Task.detached(priority: .userInitiated) {
+                SWPAppInventory.command("/usr/bin/xcrun", ["simctl", "delete", "unavailable"], timeout: 180)
             }.value
             guard let self else { return }
             self.isDeletingSimulators = false
-            self.log.info("simctl delete unavailable: \(output.count) bytes of output")
             self.scan()
+            self.restoreFailures = result.succeeded ? [] : [result.failure ?? result.output]
+            self.restoreMessage = result.succeeded ? "Unavailable simulator deletion completed."
+                : "Simulator deletion did not complete successfully. Some devices may already have been deleted; review Xcode before retrying."
         }
     }
 
     // MARK: Restore
 
-    /// Quarantine folders from previous authorised removals that can be undone.
+    /// Nonempty quarantine batches from previous removals, newest first.
     ///
     /// Cached rather than computed: reading it walks `~/.Trash`, and a computed
     /// property would do that on every SwiftUI render pass.
     @Published private(set) var restorableFolders: [URL] = []
 
+    private var restorableGeneration = 0
+
+    /// Lists `~/.Trash` and parses every Sweep manifest, so it runs off the
+    /// main actor; the newest request wins.
     func refreshRestorable() {
-        restorableFolders = SWPRemovalService.restorableFolders()
+        restorableGeneration += 1
+        let generation = restorableGeneration
+        Task.detached(priority: .utility) { [weak self] in
+            let folders = SWPRemovalService.restorableFolders()
+            guard let self else { return }
+            await MainActor.run {
+                guard self.restorableGeneration == generation else { return }
+                self.restorableFolders = folders
+            }
+        }
     }
 
     func restore(from folder: URL) {
-        guard !isRestoring else { return }
+        guard !isMutating, !isConfirming else { return }
         isRestoring = true
+        restoreFailures = []
         Task { [weak self] in
             guard let self else { return }
             defer { self.isRestoring = false }
@@ -607,19 +696,30 @@ final class SWPScanEngine: ObservableObject {
             let result = await Task.detached(priority: .userInitiated) {
                 removal.restore(from: folder)
             }.value
-            if result.cancelled { return }
+            // Hide a fully restored batch at once, so the bar cannot offer it
+            // again while the refresh below is still reading the Trash.
+            if !result.cancelled, result.failed == 0 {
+                self.restorableFolders.removeAll { $0 == folder }
+            }
             self.refreshRestorable()
-            let message = result.failed == 0
-                ? "Restored \(result.restored) system item\(result.restored == 1 ? "" : "s")."
-                : "Restored \(result.restored); \(result.failed) could not be put back."
+            let message: String
+            if result.cancelled {
+                message = "Restored \(result.restored); administrator restore was cancelled. Remaining items stay in the Trash."
+            } else if result.failed == 0 {
+                message = "Restored \(result.restored) item\(result.restored == 1 ? "" : "s")."
+            } else {
+                message = "Restored \(result.restored); \(result.failed) could not be put back."
+            }
             // Set AFTER the rescan is kicked off: `scan()` clears transient
             // banners in its prologue, so setting it first meant the message
             // was wiped in the same turn it appeared.
             self.scan()
+            self.restoreFailures = result.failures
             self.restoreMessage = message
         }
     }
 
     @Published var restoreMessage: String?
+    @Published private(set) var restoreFailures: [String] = []
     @Published private(set) var isRestoring = false
 }

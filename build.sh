@@ -33,24 +33,46 @@ if [ "$ICON" -eq 1 ]; then
     swift Scripts/make_icon.swift
 fi
 
-echo "▸ building Sweep ($CONFIGURATION)"
-rm -rf build
-xcodebuild \
+mkdir -p build
+WORK="$(mktemp -d "$PWD/build/.sweep-build.XXXXXX")"
+trap 'rm -rf "$WORK"' EXIT
+
+# Preserve versioned release artifacts; never launch a stale app after failure.
+set --
+if [ "$CONFIGURATION" = "Release" ]; then
+    set -- CODE_SIGN_STYLE=Manual \
+        "CODE_SIGN_IDENTITY=Developer ID Application" \
+        OTHER_CODE_SIGN_FLAGS=--timestamp \
+        "ARCHS=arm64 x86_64" ONLY_ACTIVE_ARCH=NO
+fi
+
+echo "Building Sweep ($CONFIGURATION)"
+xcodebuild -quiet \
     -project Sweep.xcodeproj \
     -scheme Sweep \
     -configuration "$CONFIGURATION" \
-    -destination 'platform=macOS' \
-    CONFIGURATION_BUILD_DIR="$PWD/build" \
-    build | grep -E '(error|warning):|BUILD' || true
+    -destination 'generic/platform=macOS' \
+    -derivedDataPath "$WORK/DerivedData" \
+    CONFIGURATION_BUILD_DIR="$WORK/Products" \
+    "$@" build
 
-APP="$PWD/build/Sweep.app"
-if [ ! -d "$APP" ]; then
+STAGED_APP="$WORK/Products/Sweep.app"
+if [ ! -d "$STAGED_APP" ]; then
     echo "✗ build produced no app bundle" >&2
     exit 1
 fi
 
-echo "▸ signature"
-codesign -dv "$APP" 2>&1 | grep -E 'Authority|Signature|Identifier' | sed 's/^/    /' || true
+codesign --verify --deep --strict "$STAGED_APP"
+APP="$PWD/build/Sweep.app"
+rm -rf "$APP"
+mv "$STAGED_APP" "$APP"
+# Keep the symbols next to the app; the EXIT trap deletes everything in $WORK.
+if [ -d "$STAGED_APP.dSYM" ]; then
+    rm -rf "$APP.dSYM"
+    mv "$STAGED_APP.dSYM" "$APP.dSYM"
+fi
+echo "Signature"
+codesign -dv "$APP"
 
 if [ "$INSTALL" -eq 1 ]; then
     echo "▸ installing to /Applications"

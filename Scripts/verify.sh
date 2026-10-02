@@ -5,11 +5,13 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 MODELS=(ByteFormat SWPItem SafetyPolicy Settings AppInventory OrphanScanner JunkScanner
-        StartupScanner InstalledApps ResidueFinder)
+        StartupScanner InstalledApps ResidueFinder LocalAIScanner AIInventoryScanner StorageScanner)
 SOURCES=()
 for model in "${MODELS[@]}"; do SOURCES+=("Sweep/Models/$model.swift"); done
 
-OUT="$(mktemp -d)/sweep-verify"
+OUT_DIR="$(mktemp -d)"
+trap 'rm -rf "$OUT_DIR"' EXIT
+OUT="$OUT_DIR/sweep-verify"
 swiftc -O -o "$OUT" "${SOURCES[@]}" Scripts/verify/main.swift
 
 # `--compile-only` is for CI, which has no representative filesystem to scan.

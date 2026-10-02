@@ -60,6 +60,44 @@
 		5EE900000000000000000041 /* RemovalService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EE90000000000000000000A /* RemovalService.swift */; };
 		5EE900000000000000000042 /* InstalledApps.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EE90000000000000000000B /* InstalledApps.swift */; };
 		5EE900000000000000000043 /* ResidueFinder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EE90000000000000000000C /* ResidueFinder.swift */; };
+		5EE900000000000000000090 /* PrivacyService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EE900000000000000000086 /* PrivacyService.swift */; };
+		5EE900000000000000000091 /* PrivacyStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EE900000000000000000087 /* PrivacyStore.swift */; };
+		5EE900000000000000000092 /* PrivacyView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EE900000000000000000088 /* PrivacyView.swift */; };
+		5EE900000000000000000093 /* PrivacyService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EE900000000000000000086 /* PrivacyService.swift */; };
+		5EE900000000000000000094 /* PrivacyStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EE900000000000000000087 /* PrivacyStore.swift */; };
+		5EE900000000000000000095 /* PrivacyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EE900000000000000000089 /* PrivacyTests.swift */; };
+		5EE9000000000000000000B0 /* LocalAIScanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EE9000000000000000000A0 /* LocalAIScanner.swift */; };
+		5EE9000000000000000000B1 /* LocalAIScanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EE9000000000000000000A0 /* LocalAIScanner.swift */; };
+		5EE9000000000000000000B2 /* LocalAIScanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EE9000000000000000000A0 /* LocalAIScanner.swift */; };
+		5EE9000000000000000000B3 /* LocalAIRemovalService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EE9000000000000000000A1 /* LocalAIRemovalService.swift */; };
+		5EE9000000000000000000B4 /* LocalAIRemovalService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EE9000000000000000000A1 /* LocalAIRemovalService.swift */; };
+		5EE9000000000000000000B5 /* LocalAIStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EE9000000000000000000A2 /* LocalAIStore.swift */; };
+		5EE9000000000000000000B6 /* LocalAIStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EE9000000000000000000A2 /* LocalAIStore.swift */; };
+		5EE9000000000000000000B7 /* LocalAIView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EE9000000000000000000A3 /* LocalAIView.swift */; };
+		5EE9000000000000000000B8 /* LocalAIScannerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EE9000000000000000000A4 /* LocalAIScannerTests.swift */; };
+		5EE9000000000000000000B9 /* LocalAIRemovalTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EE9000000000000000000A5 /* LocalAIRemovalTests.swift */; };
+		5EE9000000000000000000BA /* LocalAIStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EE9000000000000000000A6 /* LocalAIStoreTests.swift */; };
+		5EE9000000000000000000D0 /* StorageScanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EE9000000000000000000C0 /* StorageScanner.swift */; };
+		5EE9000000000000000000D1 /* StorageScanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EE9000000000000000000C0 /* StorageScanner.swift */; };
+		5EE9000000000000000000D2 /* StorageStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EE9000000000000000000C1 /* StorageStore.swift */; };
+		5EE9000000000000000000D3 /* StorageStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EE9000000000000000000C1 /* StorageStore.swift */; };
+		5EE9000000000000000000D4 /* StorageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EE9000000000000000000C2 /* StorageView.swift */; };
+		5EE9000000000000000000D5 /* StorageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EE9000000000000000000C3 /* StorageTests.swift */; };
+		5EE9000000000000000000D6 /* ResultFilter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EE9000000000000000000C4 /* ResultFilter.swift */; };
+		5EE9000000000000000000D7 /* ResultFilter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EE9000000000000000000C4 /* ResultFilter.swift */; };
+		5EE9000000000000000000D8 /* ResultFilterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EE9000000000000000000C5 /* ResultFilterTests.swift */; };
+		5EE9000000000000000000E0 /* ScanEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EE900000000000000000009 /* ScanEngine.swift */; };
+		5EE9000000000000000000E1 /* UninstallStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EE90000000000000000000D /* UninstallStore.swift */; };
+		5EE9000000000000000000E2 /* TrashWatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EE90000000000000000007F /* TrashWatcher.swift */; };
+		5EE9000000000000000000E3 /* IgnoreList.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EE90000000000000000005C /* IgnoreList.swift */; };
+		5EE9000000000000000000E4 /* JunkScanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EE900000000000000000007 /* JunkScanner.swift */; };
+		5EE9000000000000000000E5 /* OrphanScanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EE900000000000000000006 /* OrphanScanner.swift */; };
+		5EE9000000000000000000E6 /* WorkflowRegressionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EE9000000000000000000E7 /* WorkflowRegressionTests.swift */; };
+		5EE9000000000000000000F1 /* AIInventoryScanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EE9000000000000000000F0 /* AIInventoryScanner.swift */; };
+		5EE9000000000000000000F2 /* AIInventoryScanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EE9000000000000000000F0 /* AIInventoryScanner.swift */; };
+		5EE9000000000000000000F3 /* AIInventoryScanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EE9000000000000000000F0 /* AIInventoryScanner.swift */; };
+		5EE9000000000000000000F4 /* StorageScanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EE9000000000000000000C0 /* StorageScanner.swift */; };
+		5EE9000000000000000000F6 /* AIInventoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EE9000000000000000000F5 /* AIInventoryTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -106,6 +144,26 @@
 		5EE900000000000000000081 /* Localizable.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = Localizable.xcstrings; sourceTree = "<group>"; };
 		5EE90000000000000000001F /* Sweep.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Sweep.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		5EE900000000000000000020 /* SweepTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = SweepTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		5EE900000000000000000086 /* PrivacyService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivacyService.swift; sourceTree = "<group>"; };
+		5EE900000000000000000087 /* PrivacyStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivacyStore.swift; sourceTree = "<group>"; };
+		5EE900000000000000000088 /* PrivacyView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivacyView.swift; sourceTree = "<group>"; };
+		5EE900000000000000000089 /* PrivacyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivacyTests.swift; sourceTree = "<group>"; };
+		5EE9000000000000000000A0 /* LocalAIScanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalAIScanner.swift; sourceTree = "<group>"; };
+		5EE9000000000000000000A1 /* LocalAIRemovalService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalAIRemovalService.swift; sourceTree = "<group>"; };
+		5EE9000000000000000000A2 /* LocalAIStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalAIStore.swift; sourceTree = "<group>"; };
+		5EE9000000000000000000A3 /* LocalAIView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalAIView.swift; sourceTree = "<group>"; };
+		5EE9000000000000000000A4 /* LocalAIScannerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalAIScannerTests.swift; sourceTree = "<group>"; };
+		5EE9000000000000000000A5 /* LocalAIRemovalTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalAIRemovalTests.swift; sourceTree = "<group>"; };
+		5EE9000000000000000000A6 /* LocalAIStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalAIStoreTests.swift; sourceTree = "<group>"; };
+		5EE9000000000000000000C0 /* StorageScanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StorageScanner.swift; sourceTree = "<group>"; };
+		5EE9000000000000000000C1 /* StorageStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StorageStore.swift; sourceTree = "<group>"; };
+		5EE9000000000000000000C2 /* StorageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StorageView.swift; sourceTree = "<group>"; };
+		5EE9000000000000000000C3 /* StorageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StorageTests.swift; sourceTree = "<group>"; };
+		5EE9000000000000000000C4 /* ResultFilter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResultFilter.swift; sourceTree = "<group>"; };
+		5EE9000000000000000000C5 /* ResultFilterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResultFilterTests.swift; sourceTree = "<group>"; };
+		5EE9000000000000000000E7 /* WorkflowRegressionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkflowRegressionTests.swift; sourceTree = "<group>"; };
+		5EE9000000000000000000F0 /* AIInventoryScanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIInventoryScanner.swift; sourceTree = "<group>"; };
+		5EE9000000000000000000F5 /* AIInventoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIInventoryTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -194,6 +252,15 @@
 				5EE90000000000000000005C /* IgnoreList.swift */,
 				5EE90000000000000000007F /* TrashWatcher.swift */,
 				5EE900000000000000000068 /* Settings.swift */,
+				5EE900000000000000000086 /* PrivacyService.swift */,
+				5EE900000000000000000087 /* PrivacyStore.swift */,
+				5EE9000000000000000000A0 /* LocalAIScanner.swift */,
+				5EE9000000000000000000F0 /* AIInventoryScanner.swift */,
+				5EE9000000000000000000A1 /* LocalAIRemovalService.swift */,
+				5EE9000000000000000000A2 /* LocalAIStore.swift */,
+				5EE9000000000000000000C0 /* StorageScanner.swift */,
+				5EE9000000000000000000C1 /* StorageStore.swift */,
+				5EE9000000000000000000C4 /* ResultFilter.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -213,6 +280,9 @@
 				5EE900000000000000000017 /* UninstallView.swift */,
 				5EE900000000000000000018 /* AboutView.swift */,
 				5EE900000000000000000065 /* SettingsView.swift */,
+				5EE900000000000000000088 /* PrivacyView.swift */,
+				5EE9000000000000000000A3 /* LocalAIView.swift */,
+				5EE9000000000000000000C2 /* StorageView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -223,7 +293,15 @@
 				5EE900000000000000000019 /* SafetyPolicyTests.swift */,
 				5EE90000000000000000001A /* MatchingTests.swift */,
 				5EE900000000000000000062 /* ImprovementTests.swift */,
+				5EE9000000000000000000E7 /* WorkflowRegressionTests.swift */,
 				5EE90000000000000000001B /* UninstallTests.swift */,
+				5EE900000000000000000089 /* PrivacyTests.swift */,
+				5EE9000000000000000000A4 /* LocalAIScannerTests.swift */,
+				5EE9000000000000000000F5 /* AIInventoryTests.swift */,
+				5EE9000000000000000000A5 /* LocalAIRemovalTests.swift */,
+				5EE9000000000000000000A6 /* LocalAIStoreTests.swift */,
+				5EE9000000000000000000C3 /* StorageTests.swift */,
+				5EE9000000000000000000C5 /* ResultFilterTests.swift */,
 			);
 			path = SweepTests;
 			sourceTree = "<group>";
@@ -354,6 +432,9 @@
 				5EE90000000000000000007C /* StartupScanner.swift in Sources */,
 				5EE90000000000000000007D /* InstalledApps.swift in Sources */,
 				5EE90000000000000000007E /* ResidueFinder.swift in Sources */,
+				5EE9000000000000000000B1 /* LocalAIScanner.swift in Sources */,
+				5EE9000000000000000000F3 /* AIInventoryScanner.swift in Sources */,
+				5EE9000000000000000000F4 /* StorageScanner.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -390,6 +471,18 @@
 				5EE900000000000000000037 /* UninstallView.swift in Sources */,
 				5EE900000000000000000038 /* AboutView.swift in Sources */,
 				5EE900000000000000000066 /* SettingsView.swift in Sources */,
+				5EE900000000000000000090 /* PrivacyService.swift in Sources */,
+				5EE900000000000000000091 /* PrivacyStore.swift in Sources */,
+				5EE900000000000000000092 /* PrivacyView.swift in Sources */,
+				5EE9000000000000000000B0 /* LocalAIScanner.swift in Sources */,
+				5EE9000000000000000000F1 /* AIInventoryScanner.swift in Sources */,
+				5EE9000000000000000000B3 /* LocalAIRemovalService.swift in Sources */,
+				5EE9000000000000000000B5 /* LocalAIStore.swift in Sources */,
+				5EE9000000000000000000B7 /* LocalAIView.swift in Sources */,
+				5EE9000000000000000000D0 /* StorageScanner.swift in Sources */,
+				5EE9000000000000000000D2 /* StorageStore.swift in Sources */,
+				5EE9000000000000000000D4 /* StorageView.swift in Sources */,
+				5EE9000000000000000000D6 /* ResultFilter.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -400,6 +493,13 @@
 				5EE90000000000000000003A /* SafetyPolicyTests.swift in Sources */,
 				5EE90000000000000000003B /* MatchingTests.swift in Sources */,
 				5EE900000000000000000063 /* ImprovementTests.swift in Sources */,
+				5EE9000000000000000000E0 /* ScanEngine.swift in Sources */,
+				5EE9000000000000000000E1 /* UninstallStore.swift in Sources */,
+				5EE9000000000000000000E2 /* TrashWatcher.swift in Sources */,
+				5EE9000000000000000000E3 /* IgnoreList.swift in Sources */,
+				5EE9000000000000000000E4 /* JunkScanner.swift in Sources */,
+				5EE9000000000000000000E5 /* OrphanScanner.swift in Sources */,
+				5EE9000000000000000000E6 /* WorkflowRegressionTests.swift in Sources */,
 				5EE90000000000000000003C /* UninstallTests.swift in Sources */,
 				5EE90000000000000000003D /* SafetyPolicy.swift in Sources */,
 				5EE90000000000000000006A /* Settings.swift in Sources */,
@@ -410,6 +510,22 @@
 				5EE900000000000000000041 /* RemovalService.swift in Sources */,
 				5EE900000000000000000042 /* InstalledApps.swift in Sources */,
 				5EE900000000000000000043 /* ResidueFinder.swift in Sources */,
+				5EE900000000000000000093 /* PrivacyService.swift in Sources */,
+				5EE900000000000000000094 /* PrivacyStore.swift in Sources */,
+				5EE900000000000000000095 /* PrivacyTests.swift in Sources */,
+				5EE9000000000000000000B2 /* LocalAIScanner.swift in Sources */,
+				5EE9000000000000000000F2 /* AIInventoryScanner.swift in Sources */,
+				5EE9000000000000000000F6 /* AIInventoryTests.swift in Sources */,
+				5EE9000000000000000000B4 /* LocalAIRemovalService.swift in Sources */,
+				5EE9000000000000000000B6 /* LocalAIStore.swift in Sources */,
+				5EE9000000000000000000B8 /* LocalAIScannerTests.swift in Sources */,
+				5EE9000000000000000000B9 /* LocalAIRemovalTests.swift in Sources */,
+				5EE9000000000000000000BA /* LocalAIStoreTests.swift in Sources */,
+				5EE9000000000000000000D1 /* StorageScanner.swift in Sources */,
+				5EE9000000000000000000D3 /* StorageStore.swift in Sources */,
+				5EE9000000000000000000D5 /* StorageTests.swift in Sources */,
+				5EE9000000000000000000D7 /* ResultFilter.swift in Sources */,
+				5EE9000000000000000000D8 /* ResultFilterTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -568,7 +684,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = Sweep/Sweep.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 11;
 				ENABLE_APP_SANDBOX = NO;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Sweep/Info.plist;
@@ -578,7 +694,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 1.0.1;
+				MARKETING_VERSION = 1.0.2;
 				PRODUCT_BUNDLE_IDENTIFIER = com.gasanache.sweep;
 				PRODUCT_NAME = Sweep;
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -590,8 +706,9 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = Sweep/Sweep.entitlements;
+				CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 11;
 				ENABLE_APP_SANDBOX = NO;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Sweep/Info.plist;
@@ -601,7 +718,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 1.0.1;
+				MARKETING_VERSION = 1.0.2;
 				PRODUCT_BUNDLE_IDENTIFIER = com.gasanache.sweep;
 				PRODUCT_NAME = Sweep;
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -612,9 +729,9 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 11;
 				GENERATE_INFOPLIST_FILE = YES;
-				MARKETING_VERSION = 1.0.1;
+				MARKETING_VERSION = 1.0.2;
 				PRODUCT_BUNDLE_IDENTIFIER = com.gasanache.sweep.tests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = NO;
@@ -625,9 +742,9 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 11;
 				GENERATE_INFOPLIST_FILE = YES;
-				MARKETING_VERSION = 1.0.1;
+				MARKETING_VERSION = 1.0.2;
 				PRODUCT_BUNDLE_IDENTIFIER = com.gasanache.sweep.tests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = NO;

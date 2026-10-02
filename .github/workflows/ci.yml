@@ -24,6 +24,9 @@ jobs:
           xcodebuild test -project Sweep.xcodeproj -scheme Sweep \
             -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO
 
+      - name: Verify isolated removal and recovery workflows
+        run: ./Scripts/verify-workflows.sh
+
       # Compile-only: a CI runner has no representative Library to scan, so
       # running the harness would prove nothing. Compiling it does — it is the
       # check that the model files still build standalone, which is what keeps

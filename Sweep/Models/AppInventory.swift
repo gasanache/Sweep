@@ -1,5 +1,6 @@
 import Foundation
 import os
+import Darwin
 
 // MARK: - App inventory
 
@@ -326,38 +327,91 @@ struct SWPAppInventory {
 
     // MARK: Shell
 
-    /// Minimal synchronous shell-out. Failures return an empty string: every
-    /// caller treats missing output as "no extra evidence", which degrades the
-    /// inventory rather than the scan.
-    ///
-    /// A watchdog terminates the helper after `timeout`. `mdfind` in
-    /// particular can wedge while Spotlight re-indexes, and a wedged helper
-    /// must cost the scan its Spotlight evidence, not hang it forever —
-    /// termination closes the pipe, the read reaches EOF, and whatever was
-    /// produced up to that point still counts.
-    @discardableResult
-    static func shell(_ launchPath: String, _ arguments: [String],
-                      timeout: TimeInterval = 20) -> String {
-        guard FileManager.default.isExecutableFile(atPath: launchPath) else { return "" }
+    struct CommandResult: Sendable {
+        let status: Int32?
+        var output: String = ""
+        var failure: String?
+        var succeeded: Bool { status == 0 && failure == nil }
+    }
+
+    /// Bounded child lifetime and output capture. Never waits for EOF from a
+    /// descendant that inherited stdout, and never relies on SIGTERM alone.
+    static func command(_ launchPath: String, _ arguments: [String],
+                        timeout: TimeInterval = 20, maximumOutput: Int = 1_048_576) -> CommandResult {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: launchPath)
         process.arguments = arguments
+        process.standardInput = FileHandle.nullDevice
+        var environment = ProcessInfo.processInfo.environment
+        environment["HOMEBREW_NO_AUTO_UPDATE"] = "1"
+        environment["HOMEBREW_NO_ANALYTICS"] = "1"
+        process.environment = environment
         let pipe = Pipe()
         process.standardOutput = pipe
-        process.standardError = FileHandle.nullDevice
-        do {
-            try process.run()
-        } catch {
-            log.error("shell failed: \(launchPath, privacy: .public)")
-            return ""
+        process.standardError = pipe
+        defer {
+            try? pipe.fileHandleForReading.close()
+            try? pipe.fileHandleForWriting.close()
         }
-        let watchdog = DispatchWorkItem { process.terminate() }
-        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + timeout,
-                                                       execute: watchdog)
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        watchdog.cancel()
-        return String(data: data, encoding: .utf8) ?? ""
+        let fd = pipe.fileHandleForReading.fileDescriptor
+        let flags = fcntl(fd, F_GETFL)
+        guard flags >= 0, fcntl(fd, F_SETFL, flags | O_NONBLOCK) >= 0 else {
+            return CommandResult(status: nil, failure: "Could not configure bounded output capture.")
+        }
+        guard !Task.isCancelled else { return CommandResult(status: nil, failure: "Command cancelled before launch.") }
+        do { try process.run() }
+        catch { return CommandResult(status: nil, failure: error.localizedDescription) }
+        try? pipe.fileHandleForWriting.close()
+        var data = Data()
+        var failure: String?
+        var buffer = [UInt8](repeating: 0, count: 4_096)
+        func drain() {
+            for _ in 0..<16 {
+                let count = Darwin.read(fd, &buffer, buffer.count)
+                if count <= 0 {
+                    if count < 0, errno != EAGAIN, errno != EINTR { failure = "Command output could not be read." }
+                    break
+                }
+                let remaining = max(0, maximumOutput - data.count)
+                data.append(contentsOf: buffer.prefix(min(count, remaining)))
+                if count > remaining { failure = "Command output exceeded its limit."; break }
+            }
+        }
+        let deadline = ProcessInfo.processInfo.systemUptime + max(0, timeout)
+        while process.isRunning {
+            drain()
+            if Task.isCancelled { failure = "Command cancelled; effects may be partial." }
+            if ProcessInfo.processInfo.systemUptime >= deadline { failure = "Command timed out; effects may be partial." }
+            if failure != nil { break }
+            Thread.sleep(forTimeInterval: 0.01)
+        }
+        if failure != nil, process.isRunning {
+            process.terminate()
+            let grace = ProcessInfo.processInfo.systemUptime + 0.2
+            while process.isRunning && ProcessInfo.processInfo.systemUptime < grace {
+                drain()
+                Thread.sleep(forTimeInterval: 0.01)
+            }
+            if process.isRunning { _ = kill(process.processIdentifier, SIGKILL) }
+            let exitDeadline = ProcessInfo.processInfo.systemUptime + 0.5
+            while process.isRunning && ProcessInfo.processInfo.systemUptime < exitDeadline {
+                Thread.sleep(forTimeInterval: 0.01)
+            }
+        }
+        drain()
+        let status = process.isRunning ? nil : process.terminationStatus
+        if !process.isRunning, process.terminationReason != .exit, failure == nil {
+            failure = "Command terminated by a signal."
+        }
+        return CommandResult(status: status, output: String(decoding: data, as: UTF8.self), failure: failure)
+    }
+
+    /// Incomplete or failed inventory output is never positive ownership evidence.
+    @discardableResult
+    static func shell(_ launchPath: String, _ arguments: [String],
+                      timeout: TimeInterval = 20) -> String {
+        let result = command(launchPath, arguments, timeout: timeout)
+        return result.succeeded ? result.output : ""
     }
 }
 

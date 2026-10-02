@@ -7,9 +7,7 @@ import UniformTypeIdentifiers
 @main
 struct SweepApp: App {
 
-    /// One engine and one uninstall store for the process, owned here and
-    /// injected downward, matching the `@StateObject` at the root /
-    /// `@EnvironmentObject` below pattern used across these projects.
+    /// Shared workflow state survives navigation and window changes.
     @StateObject private var engine = SWPScanEngine()
     @StateObject private var uninstaller = SWPUninstallStore()
     @StateObject private var trashWatcher = SWPTrashWatcher()
@@ -35,7 +33,7 @@ struct SweepApp: App {
                     Button("Not Now", role: .cancel) { trashWatcher.dismiss() }
                     Button("Review Leftovers") {
                         if let caught = trashWatcher.pending {
-                            engine.isUninstallerActive = true
+                            engine.destination = .uninstaller
                             uninstaller.selectTrashedApp(caught.app)
                         }
                         trashWatcher.dismiss()
@@ -46,17 +44,15 @@ struct SweepApp: App {
         }
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentMinSize)
-        .defaultSize(width: 940, height: 640)
+        .defaultSize(width: 1044, height: 667)
         .commands {
-            // The template's New Window entry makes no sense for a
-            // single-window utility, and the stock grey About panel is
-            // replaced by our own window below.
+            // Single main window and a custom About window.
             CommandGroup(replacing: .newItem) { }
             CommandGroup(replacing: .appInfo) {
                 Button("About Sweep") { openWindow(id: "about") }
             }
             CommandGroup(after: .saveItem) {
-                Button("Export Diagnostics…") { exportDiagnostics() }
+                Button("Export Diagnostics") { exportDiagnostics() }
                     .keyboardShortcut("e", modifiers: [.command, .shift])
             }
         }

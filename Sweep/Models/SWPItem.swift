@@ -23,7 +23,7 @@ enum SWPCategory: String, CaseIterable, Identifiable, Hashable {
         case .leftovers: return "App Leftovers"
         case .caches:    return "Caches"
         case .logs:      return "Logs & Reports"
-        case .developer: return "Developer Junk"
+        case .developer: return "Developer Data"
         case .startup:   return "Startup Items"
         }
     }
@@ -49,13 +49,58 @@ enum SWPCategory: String, CaseIterable, Identifiable, Hashable {
     }
 }
 
+// MARK: - Navigation
+
+/// Presentation routing only. This does not combine the tools' mutation state.
+enum SWPDestination: Hashable {
+    case cleanup(SWPCategory)
+    case uninstaller, privacy, localAI, storage
+
+    static let tools: [Self] = [.uninstaller, .privacy, .storage]
+
+    var isCleanup: Bool {
+        if case .cleanup = self { return true }
+        return false
+    }
+
+    var title: String {
+        switch self {
+        case .cleanup(let category): return category.title
+        case .uninstaller: return "Uninstaller"
+        case .privacy: return "App Permissions"
+        case .localAI: return "AI & Models"
+        case .storage: return "Storage Explorer"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .cleanup(let category): return category.symbolName
+        case .uninstaller: return "app.dashed"
+        case .privacy: return "hand.raised"
+        case .localAI: return "cpu"
+        case .storage: return "externaldrive"
+        }
+    }
+
+    var id: String {
+        switch self {
+        case .cleanup(let category): return category.rawValue
+        case .uninstaller: return "uninstaller"
+        case .privacy: return "privacy"
+        case .localAI: return "local-ai"
+        case .storage: return "storage"
+        }
+    }
+}
+
 // MARK: - Confidence
 
 /// What Sweep knows about the wisdom of removing something.
 ///
 /// This drives the badge and the sort order — and nothing else. It used to
-/// also drive pre-selection, but that concept is gone: a scan now ends with
-/// zero ticks, whatever the tier says. The cost of a false positive (deleting
+/// also drive pre-selection, but that concept is gone: the first scan starts
+/// unselected; rescans retain only the user's still-valid selections. The cost of a false positive (deleting
 /// a live app's data) vastly outweighs the cost of a false negative (leaving
 /// megabytes on a half-terabyte disk), so every selection is the user's.
 enum SWPConfidence: Int, Hashable {
@@ -64,7 +109,7 @@ enum SWPConfidence: Int, Hashable {
     case safe = 0
     /// Bundle-identifier evidence says the owning app is not installed.
     case confirmed = 1
-    /// Name-only match. Plausible, but review before removing.
+    /// Name-only evidence or an incomplete ownership inventory. Review first.
     case likely = 2
     /// The owner is still installed. Offered because clearing a live app's
     /// cache is sometimes genuinely wanted, but never suggested: the app will
@@ -137,7 +182,7 @@ struct SWPGroup: Identifiable, Hashable {
     var sizeBytes: Int64 { items.reduce(0) { $0 + $1.sizeBytes } }
     var requiresAdmin: Bool { items.contains { $0.requiresAdmin } }
 
-    /// Most recent modification across the group, shown as "last used".
+    /// Most recent filesystem modification; not evidence of application usage.
     var latestModified: Date? { items.compactMap(\.modified).max() }
 
     /// Distinct locations this group spans, most common first, capped at three.
@@ -168,7 +213,7 @@ struct SWPGroup: Identifiable, Hashable {
         guard let date = latestModified else { return count }
         let formatter = DateFormatter()
         formatter.dateFormat = "MMM yyyy"
-        return "\(count) · last used \(formatter.string(from: date))"
+        return "\(count) · modified \(formatter.string(from: date))"
     }
 }
 
@@ -189,6 +234,8 @@ struct SWPScanResult {
     /// Carried on the result so a streaming scan can deliver it with the
     /// startup stage rather than as separate engine state.
     var healthyStartup: [SWPStartupEntry] = []
+    /// Read-only AI evidence stays outside groups, byte totals and selection.
+    var aiInventory: SWPAIInventory?
 
     /// Folds one stage's metadata into the running result. Groups are appended
     /// by the caller; this carries only the scalar and list fields, and never
@@ -199,6 +246,7 @@ struct SWPScanResult {
         if other.trashBytes > 0 { trashBytes = other.trashBytes }
         if !other.unreadablePaths.isEmpty { unreadablePaths += other.unreadablePaths }
         if !other.healthyStartup.isEmpty { healthyStartup = other.healthyStartup }
+        if let ai = other.aiInventory { aiInventory = ai }
     }
 
     func groups(in category: SWPCategory) -> [SWPGroup] {
